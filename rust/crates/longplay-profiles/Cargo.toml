@@ -1,0 +1,7 @@
+[package]
+name = "longplay-profiles"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+longplay-core = { workspace = true }

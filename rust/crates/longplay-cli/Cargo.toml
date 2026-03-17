@@ -1,0 +1,17 @@
+[package]
+name = "longplay-cli"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "longplay-master"
+path = "src/main.rs"
+
+[dependencies]
+longplay-core = { workspace = true }
+longplay-chain = { workspace = true }
+longplay-analysis = { workspace = true }
+longplay-profiles = { workspace = true }
+longplay-ai = { workspace = true }
+clap = { workspace = true }
+anyhow = { workspace = true }

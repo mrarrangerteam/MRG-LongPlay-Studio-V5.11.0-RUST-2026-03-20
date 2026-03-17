@@ -1,0 +1,18 @@
+[package]
+name = "longplay-chain"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+longplay-core = { workspace = true }
+longplay-io = { workspace = true }
+longplay-dsp = { workspace = true }
+longplay-analysis = { workspace = true }
+longplay-profiles = { workspace = true }
+longplay-ai = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+rayon = { workspace = true }
+
+[dev-dependencies]
+hound = { workspace = true }

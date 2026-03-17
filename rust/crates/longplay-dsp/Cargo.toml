@@ -1,0 +1,12 @@
+[package]
+name = "longplay-dsp"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+longplay-core = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+hound = { workspace = true }

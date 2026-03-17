@@ -1,0 +1,721 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LongPlay Studio V5.9 — Vintage Hardware UI</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=EB+Garamond:wght@400;600;700&display=swap');
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  :root {
+    --chassis: #1A1510;
+    --panel: #2C2520;
+    --panel-light: #3E3630;
+    --amber: #E8A832;
+    --amber-glow: #F5D080;
+    --gold: #C89B3C;
+    --teal: #8BAF6E;
+    --cream: #F0E8D8;
+    --cream-dim: #9C8E78;
+    --groove: #0E0A06;
+    --ridge: #4A4238;
+    --screw: #6B5E54;
+    --border: #382E28;
+    --mod-eq: #6BAED6;
+    --mod-dyn: #D4845A;
+    --mod-img: #B088A0;
+    --mod-max: #D4A84B;
+    --mod-ai: #8BAF6E;
+    --led-green: #5C9A3C;
+    --led-red: #CC3333;
+    --led-yellow: #E8C830;
+  }
+
+  body {
+    background: linear-gradient(135deg, #0E0A06, #1A1510 40%, #2C2520 100%);
+    color: var(--cream);
+    font-family: 'EB Garamond', Georgia, serif;
+    min-height: 100vh;
+    padding: 12px;
+  }
+
+  .console {
+    max-width: 960px;
+    margin: 0 auto;
+    background: linear-gradient(180deg, #2C2520, #1A1510 60%, #0E0A06);
+    border: 2px solid var(--border);
+    border-radius: 8px;
+    box-shadow:
+      0 0 40px rgba(0,0,0,0.8),
+      inset 0 1px 0 rgba(106,94,84,0.3),
+      0 4px 20px rgba(232,168,50,0.05);
+    overflow: hidden;
+  }
+
+  /* ── Title Bar ── */
+  .title-bar {
+    text-align: center;
+    padding: 16px 12px 8px;
+    background: linear-gradient(180deg, #342E28, #2C2520);
+    border-bottom: 1px solid var(--groove);
+  }
+  .title-bar h1 {
+    font-size: 18px;
+    font-weight: 700;
+    color: var(--gold);
+    letter-spacing: 5px;
+    text-shadow: 0 0 12px rgba(200,155,60,0.4);
+  }
+  .title-bar .subtitle {
+    font-size: 10px;
+    color: var(--cream-dim);
+    letter-spacing: 3px;
+    margin-top: 4px;
+  }
+
+  /* ── Screws ── */
+  .screw-row {
+    display: flex;
+    justify-content: space-between;
+    padding: 6px 16px;
+  }
+  .screw {
+    width: 10px; height: 10px;
+    border-radius: 50%;
+    background: radial-gradient(circle at 35% 35%, #8A7E72, #4A4238 60%, #1A1510);
+    border: 1px solid #0E0A06;
+    box-shadow: inset 0 1px 1px rgba(255,255,255,0.1);
+  }
+  .screw::after {
+    content: '';
+    display: block;
+    width: 8px; height: 1px;
+    background: #1A1510;
+    margin: 4px auto 0;
+    transform: rotate(35deg);
+  }
+
+  /* ── Module Strip ── */
+  .module-strip {
+    display: flex;
+    gap: 6px;
+    padding: 8px 12px;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .module {
+    flex: 1;
+    min-width: 200px;
+    background: linear-gradient(180deg, #342E28, #2C2520 40%, #241E18);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 10px 8px;
+    box-shadow:
+      inset 0 1px 0 rgba(106,94,84,0.2),
+      0 2px 8px rgba(0,0,0,0.5);
+  }
+  .module-header {
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 3px;
+    text-align: center;
+    padding-bottom: 6px;
+    margin-bottom: 8px;
+    border-bottom: 1px solid var(--groove);
+    text-transform: uppercase;
+  }
+  .module.eq { border-left: 3px solid var(--mod-eq); }
+  .module.eq .module-header { color: var(--mod-eq); }
+  .module.dyn { border-left: 3px solid var(--mod-dyn); }
+  .module.dyn .module-header { color: var(--mod-dyn); }
+  .module.img { border-left: 3px solid var(--mod-img); }
+  .module.img .module-header { color: var(--mod-img); }
+  .module.max { border-left: 3px solid var(--mod-max); }
+  .module.max .module-header { color: var(--mod-max); }
+
+  /* ── Knob ── */
+  .knob-row {
+    display: flex;
+    justify-content: center;
+    gap: 6px;
+    flex-wrap: wrap;
+  }
+  .knob-container {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    width: 70px;
+  }
+  .knob-label {
+    font-size: 7px;
+    font-weight: 700;
+    color: var(--cream-dim);
+    letter-spacing: 1.5px;
+    text-transform: uppercase;
+    margin-bottom: 4px;
+    text-align: center;
+  }
+  .knob {
+    width: 56px; height: 56px;
+    border-radius: 50%;
+    position: relative;
+    cursor: pointer;
+    /* Brushed metal body */
+    background: conic-gradient(from 135deg, #6B5E54, #4A403A, #2C2520, #4A403A, #6B5E54);
+    border: 2px solid #1A1510;
+    box-shadow:
+      0 2px 6px rgba(0,0,0,0.6),
+      inset 0 1px 2px rgba(139,126,114,0.3),
+      0 0 0 1px rgba(106,94,84,0.2);
+  }
+  .knob::before {
+    /* Pointer line */
+    content: '';
+    position: absolute;
+    width: 2px;
+    height: 18px;
+    background: var(--amber-glow);
+    top: 4px;
+    left: 50%;
+    transform: translateX(-50%);
+    border-radius: 1px;
+    box-shadow: 0 0 4px rgba(245,208,128,0.5);
+    transform-origin: bottom center;
+  }
+  .knob::after {
+    /* Center hub */
+    content: '';
+    position: absolute;
+    width: 12px; height: 12px;
+    border-radius: 50%;
+    top: 50%; left: 50%;
+    transform: translate(-50%, -50%);
+    background: radial-gradient(circle at 35% 35%, #8A7E72, #5A5048 50%, #3A3228);
+    border: 0.5px solid #1A1510;
+  }
+  /* Tick marks around knob */
+  .knob-ticks {
+    width: 66px; height: 66px;
+    position: relative;
+    margin-bottom: -62px;
+  }
+  .tick {
+    position: absolute;
+    width: 1px; height: 4px;
+    background: var(--screw);
+    top: 0; left: 50%;
+    transform-origin: 0.5px 33px;
+  }
+
+  /* Rotated knobs */
+  .knob.pos-0 { transform: rotate(-135deg); }
+  .knob.pos-25 { transform: rotate(-67deg); }
+  .knob.pos-50 { transform: rotate(0deg); }
+  .knob.pos-75 { transform: rotate(67deg); }
+  .knob.pos-100 { transform: rotate(135deg); }
+
+  /* LED readout */
+  .led-readout {
+    margin-top: 5px;
+    background: #1A1208;
+    border: 1px solid #0A0804;
+    border-radius: 2px;
+    padding: 2px 6px;
+    font-family: 'Menlo', 'Courier New', monospace;
+    font-size: 9px;
+    font-weight: bold;
+    color: var(--amber-glow);
+    text-align: center;
+    min-width: 40px;
+    text-shadow: 0 0 6px rgba(245,208,128,0.6);
+  }
+  .knob-unit {
+    font-size: 6px;
+    color: var(--cream-dim);
+    margin-top: 2px;
+    letter-spacing: 1px;
+  }
+
+  /* Large knob variant */
+  .knob-container.large .knob {
+    width: 72px; height: 72px;
+  }
+  .knob-container.large .knob::before {
+    height: 24px;
+  }
+  .knob-container.large {
+    width: 85px;
+  }
+
+  /* ── Buttons ── */
+  .button-strip {
+    display: flex;
+    gap: 8px;
+    padding: 10px 12px;
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+  .btn {
+    font-family: 'EB Garamond', Georgia, serif;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    padding: 10px 18px;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: all 0.15s;
+    border: none;
+    position: relative;
+  }
+  .btn-primary {
+    background: linear-gradient(180deg, #D4A84B, #B8922F 50%, #9A7A20);
+    color: #1A1510;
+    border: 1px solid #E8C060;
+    box-shadow:
+      0 2px 4px rgba(0,0,0,0.5),
+      inset 0 1px 0 rgba(255,255,255,0.2),
+      0 0 12px rgba(212,168,75,0.2);
+    text-shadow: 0 1px 0 rgba(255,255,255,0.2);
+  }
+  .btn-primary:hover {
+    background: linear-gradient(180deg, #E8BC5F, #C8A23F 50%, #AA8A30);
+    box-shadow: 0 0 20px rgba(212,168,75,0.4);
+  }
+  .btn-secondary {
+    background: linear-gradient(180deg, #4A4238, #3A3228 50%, #2C2520);
+    color: var(--cream);
+    border: 1px solid var(--ridge);
+    box-shadow:
+      0 2px 4px rgba(0,0,0,0.4),
+      inset 0 1px 0 rgba(106,94,84,0.3);
+  }
+  .btn-secondary:hover {
+    background: linear-gradient(180deg, #5A5248, #4A4238 50%, #3C3630);
+    border-color: var(--amber);
+    color: var(--amber-glow);
+  }
+  .btn-teal {
+    background: linear-gradient(180deg, #8BAF6E, #6B8F4E 50%, #5A7A3E);
+    color: #1A1510;
+    border: 1px solid #A8C88A;
+    box-shadow:
+      0 2px 4px rgba(0,0,0,0.4),
+      inset 0 1px 0 rgba(255,255,255,0.15),
+      0 0 12px rgba(139,175,110,0.15);
+    text-shadow: 0 1px 0 rgba(255,255,255,0.15);
+  }
+  .btn-teal:hover {
+    background: linear-gradient(180deg, #9BBF7E, #7B9F5E 50%, #6A8A4E);
+    box-shadow: 0 0 20px rgba(139,175,110,0.3);
+  }
+
+  /* ── Bottom Row ── */
+  .bottom-row {
+    display: flex;
+    gap: 6px;
+    padding: 4px 12px 8px;
+  }
+  .bottom-row .module { min-width: 150px; }
+
+  /* ── Meter Status ── */
+  .meter-row {
+    display: flex;
+    align-items: center;
+    padding: 3px 0;
+    font-family: 'Menlo', 'Courier New', monospace;
+    font-size: 11px;
+    font-weight: bold;
+    letter-spacing: 1px;
+  }
+  .meter-dot {
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    margin-right: 8px;
+    box-shadow: 0 0 4px;
+  }
+  .meter-dot.green { background: var(--led-green); box-shadow: 0 0 6px var(--led-green); }
+  .meter-dot.yellow { background: var(--led-yellow); box-shadow: 0 0 6px var(--led-yellow); }
+  .meter-dot.red { background: var(--led-red); box-shadow: 0 0 6px var(--led-red); }
+  .meter-dot.amber { background: var(--amber); box-shadow: 0 0 6px var(--amber); }
+
+  /* ── VU Meter (CSS) ── */
+  .vu-meter {
+    background: linear-gradient(180deg, #1A1208, #0E0A06);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 8px;
+    margin: 6px 0;
+  }
+  .vu-bar-container {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin: 3px 0;
+  }
+  .vu-label {
+    font-family: 'Menlo', monospace;
+    font-size: 8px;
+    color: var(--cream-dim);
+    width: 14px;
+    text-align: right;
+  }
+  .vu-track {
+    flex: 1;
+    height: 8px;
+    background: #0A0804;
+    border-radius: 2px;
+    overflow: hidden;
+    border: 1px solid #1A1510;
+  }
+  .vu-fill {
+    height: 100%;
+    border-radius: 1px;
+    transition: width 0.3s;
+  }
+  .vu-fill.l { width: 72%; background: linear-gradient(90deg, var(--led-green), var(--led-yellow) 80%, var(--led-red)); }
+  .vu-fill.r { width: 68%; background: linear-gradient(90deg, var(--led-green), var(--led-yellow) 80%, var(--led-red)); }
+
+  /* ── Footer ── */
+  .footer {
+    text-align: center;
+    padding: 10px;
+    font-size: 9px;
+    color: var(--cream-dim);
+    letter-spacing: 2px;
+    border-top: 1px solid var(--groove);
+  }
+
+  /* ── Module Chain Tabs ── */
+  .chain-tabs {
+    display: flex;
+    justify-content: center;
+    gap: 4px;
+    padding: 8px 12px 4px;
+  }
+  .chain-tab {
+    font-family: 'EB Garamond', Georgia, serif;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 2px;
+    padding: 6px 14px;
+    border-radius: 3px;
+    background: var(--panel);
+    color: var(--cream-dim);
+    border: 1px solid var(--groove);
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+  .chain-tab:hover { color: var(--cream); border-color: var(--ridge); }
+  .chain-tab.active { color: var(--amber-glow); border-color: var(--amber); background: var(--panel-light);
+    box-shadow: 0 0 8px rgba(232,168,50,0.15); }
+  .chain-tab .arrow { color: var(--cream-dim); font-size: 10px; margin: 0 2px; }
+
+  /* ── Signal Flow Diagram ── */
+  .signal-flow {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 2px;
+    padding: 6px 12px;
+    font-size: 9px;
+    color: var(--cream-dim);
+    letter-spacing: 1px;
+  }
+  .signal-node {
+    padding: 3px 8px;
+    border: 1px solid var(--ridge);
+    border-radius: 3px;
+    background: var(--panel);
+  }
+  .signal-arrow { color: var(--amber); font-size: 12px; }
+
+  /* ── Responsive ── */
+  @media (max-width: 640px) {
+    body { padding: 6px; }
+    .module-strip { flex-direction: column; }
+    .module { min-width: unset; }
+    .bottom-row { flex-direction: column; }
+    .knob-row { gap: 4px; }
+    .knob-container { width: 62px; }
+    .knob { width: 48px; height: 48px; }
+    .knob::before { height: 15px; }
+    .knob-container.large .knob { width: 60px; height: 60px; }
+    .knob-container.large .knob::before { height: 20px; }
+    .knob-container.large { width: 75px; }
+    .title-bar h1 { font-size: 14px; letter-spacing: 3px; }
+    .btn { padding: 8px 12px; font-size: 10px; }
+    .button-strip { gap: 6px; }
+  }
+</style>
+</head>
+<body>
+
+<div class="console">
+
+  <!-- Screws Top -->
+  <div class="screw-row">
+    <div class="screw"></div><div class="screw"></div><div class="screw"></div><div class="screw"></div>
+  </div>
+
+  <!-- Title Bar -->
+  <div class="title-bar">
+    <h1>LONGPLAY STUDIO V5.9</h1>
+    <div class="subtitle">MASTERING CONSOLE &nbsp;·&nbsp; Neve 1073 &nbsp;·&nbsp; SSL 4000 &nbsp;·&nbsp; Chandler Limited &nbsp;·&nbsp; Pultec EQP-1A</div>
+  </div>
+
+  <!-- Signal Flow -->
+  <div class="signal-flow">
+    <span class="signal-node">INPUT</span>
+    <span class="signal-arrow">→</span>
+    <span class="signal-node" style="color:var(--mod-eq)">EQ</span>
+    <span class="signal-arrow">→</span>
+    <span class="signal-node" style="color:var(--mod-dyn)">DYN</span>
+    <span class="signal-arrow">→</span>
+    <span class="signal-node" style="color:var(--mod-img)">IMG</span>
+    <span class="signal-arrow">→</span>
+    <span class="signal-node" style="color:var(--mod-max)">MAX</span>
+    <span class="signal-arrow">→</span>
+    <span class="signal-node" style="color:var(--mod-ai)">AI</span>
+    <span class="signal-arrow">→</span>
+    <span class="signal-node">OUTPUT</span>
+  </div>
+
+  <!-- Module Strip: EQ + Dynamics -->
+  <div class="module-strip">
+
+    <!-- EQ Module -->
+    <div class="module eq">
+      <div class="module-header">Parametric EQ</div>
+      <div class="knob-row">
+        <div class="knob-container">
+          <div class="knob-label">32 Hz</div>
+          <div class="knob pos-50"></div>
+          <div class="led-readout">0.0</div>
+          <div class="knob-unit">dB</div>
+        </div>
+        <div class="knob-container">
+          <div class="knob-label">250 Hz</div>
+          <div class="knob pos-75"></div>
+          <div class="led-readout">+1.5</div>
+          <div class="knob-unit">dB</div>
+        </div>
+        <div class="knob-container">
+          <div class="knob-label">1 kHz</div>
+          <div class="knob pos-25"></div>
+          <div class="led-readout">-0.5</div>
+          <div class="knob-unit">dB</div>
+        </div>
+        <div class="knob-container">
+          <div class="knob-label">8 kHz</div>
+          <div class="knob pos-75"></div>
+          <div class="led-readout">+2.0</div>
+          <div class="knob-unit">dB</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Dynamics Module -->
+    <div class="module dyn">
+      <div class="module-header">Dynamics</div>
+      <div class="knob-row">
+        <div class="knob-container">
+          <div class="knob-label">Thresh</div>
+          <div class="knob pos-25"></div>
+          <div class="led-readout">-16.0</div>
+          <div class="knob-unit">dB</div>
+        </div>
+        <div class="knob-container">
+          <div class="knob-label">Ratio</div>
+          <div class="knob pos-25"></div>
+          <div class="led-readout">2.5</div>
+          <div class="knob-unit">:1</div>
+        </div>
+        <div class="knob-container">
+          <div class="knob-label">Attack</div>
+          <div class="knob pos-25"></div>
+          <div class="led-readout">10.0</div>
+          <div class="knob-unit">ms</div>
+        </div>
+        <div class="knob-container">
+          <div class="knob-label">Release</div>
+          <div class="knob pos-25"></div>
+          <div class="led-readout">100</div>
+          <div class="knob-unit">ms</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Module Strip: Maximizer -->
+  <div class="module-strip">
+    <div class="module max" style="flex: 1;">
+      <div class="module-header">Maximizer &nbsp;·&nbsp; IRC IV</div>
+      <div class="knob-row">
+        <div class="knob-container large">
+          <div class="knob-label">Gain</div>
+          <div class="knob pos-75"></div>
+          <div class="led-readout">+8.0</div>
+          <div class="knob-unit">dB</div>
+        </div>
+        <div class="knob-container large">
+          <div class="knob-label">Ceiling</div>
+          <div class="knob pos-75"></div>
+          <div class="led-readout">-1.0</div>
+          <div class="knob-unit">dBTP</div>
+        </div>
+        <div class="knob-container large">
+          <div class="knob-label">Character</div>
+          <div class="knob pos-50"></div>
+          <div class="led-readout">5.0</div>
+          <div class="knob-unit"></div>
+        </div>
+      </div>
+
+      <!-- VU Meter -->
+      <div class="vu-meter">
+        <div class="vu-bar-container">
+          <span class="vu-label">L</span>
+          <div class="vu-track"><div class="vu-fill l"></div></div>
+        </div>
+        <div class="vu-bar-container">
+          <span class="vu-label">R</span>
+          <div class="vu-track"><div class="vu-fill r"></div></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Buttons -->
+  <div class="button-strip">
+    <button class="btn btn-primary">MASTER &amp; EXPORT</button>
+    <button class="btn btn-secondary">PREVIEW 30s</button>
+    <button class="btn btn-secondary">A/B COMPARE</button>
+    <button class="btn btn-teal">MASTER ASSISTANT</button>
+  </div>
+
+  <!-- Bottom Row: Imager + Meters -->
+  <div class="bottom-row">
+
+    <!-- Imager Module -->
+    <div class="module img" style="flex: 1;">
+      <div class="module-header">Stereo Imager</div>
+      <div class="knob-row">
+        <div class="knob-container">
+          <div class="knob-label">Width</div>
+          <div class="knob pos-75"></div>
+          <div class="led-readout">120</div>
+          <div class="knob-unit">%</div>
+        </div>
+        <div class="knob-container">
+          <div class="knob-label">Balance</div>
+          <div class="knob pos-50"></div>
+          <div class="led-readout">0</div>
+          <div class="knob-unit">%</div>
+        </div>
+        <div class="knob-container">
+          <div class="knob-label">Mono Bass</div>
+          <div class="knob pos-75"></div>
+          <div class="led-readout">80</div>
+          <div class="knob-unit">%</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Meter Status -->
+    <div class="module" style="flex: 1; border-left: 3px solid var(--amber);">
+      <div class="module-header" style="color: var(--amber);">Meter Status</div>
+      <div class="meter-row">
+        <div class="meter-dot amber"></div>
+        <span style="color: var(--cream);">INPUT: &nbsp;-18.2 LUFS</span>
+      </div>
+      <div class="meter-row">
+        <div class="meter-dot green"></div>
+        <span style="color: var(--led-green);">OUTPUT: -14.0 LUFS</span>
+      </div>
+      <div class="meter-row">
+        <div class="meter-dot yellow"></div>
+        <span style="color: var(--led-yellow);">TRUE PEAK: -1.0 dBTP</span>
+      </div>
+      <div class="meter-row">
+        <div class="meter-dot amber"></div>
+        <span style="color: var(--amber-glow);">GAIN DELTA: +4.2 dB</span>
+      </div>
+
+      <!-- Mini Spectrum (CSS bars) -->
+      <div style="display:flex; align-items:flex-end; gap:2px; height:30px; margin-top:8px; padding: 4px; background:#0A0804; border-radius:3px;">
+        <div style="flex:1;height:40%;background:var(--mod-eq);border-radius:1px;opacity:0.8;"></div>
+        <div style="flex:1;height:65%;background:var(--mod-eq);border-radius:1px;opacity:0.8;"></div>
+        <div style="flex:1;height:80%;background:var(--led-green);border-radius:1px;"></div>
+        <div style="flex:1;height:90%;background:var(--led-green);border-radius:1px;"></div>
+        <div style="flex:1;height:95%;background:var(--led-yellow);border-radius:1px;"></div>
+        <div style="flex:1;height:85%;background:var(--led-yellow);border-radius:1px;"></div>
+        <div style="flex:1;height:70%;background:var(--amber);border-radius:1px;"></div>
+        <div style="flex:1;height:55%;background:var(--amber);border-radius:1px;"></div>
+        <div style="flex:1;height:35%;background:var(--mod-dyn);border-radius:1px;opacity:0.8;"></div>
+        <div style="flex:1;height:20%;background:var(--mod-dyn);border-radius:1px;opacity:0.7;"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Screws Bottom -->
+  <div class="screw-row">
+    <div class="screw"></div><div class="screw"></div><div class="screw"></div><div class="screw"></div>
+  </div>
+
+  <!-- Footer -->
+  <div class="footer">
+    MRG LongPlay Studio &nbsp;·&nbsp; Vintage Hardware Edition &nbsp;·&nbsp; Neve / SSL / Chandler / Pultec
+  </div>
+
+</div>
+
+<!-- Interactive knob rotation (touch/mouse drag) -->
+<script>
+document.querySelectorAll('.knob').forEach(knob => {
+  let dragging = false, startY = 0, startAngle = 0;
+  const container = knob.closest('.knob-container');
+  const readout = container.querySelector('.led-readout');
+
+  // Parse initial angle from class
+  const cls = [...knob.classList].find(c => c.startsWith('pos-'));
+  let currentAngle = cls ? ({ 'pos-0': -135, 'pos-25': -67, 'pos-50': 0, 'pos-75': 67, 'pos-100': 135 }[cls] || 0) : 0;
+
+  function setAngle(deg) {
+    deg = Math.max(-135, Math.min(135, deg));
+    currentAngle = deg;
+    knob.style.transform = `rotate(${deg}deg)`;
+    knob.className = 'knob'; // remove pos-* class
+  }
+
+  function onStart(y) {
+    dragging = true; startY = y; startAngle = currentAngle;
+    document.body.style.userSelect = 'none';
+  }
+  function onMove(y) {
+    if (!dragging) return;
+    const dy = startY - y;
+    setAngle(startAngle + dy * 1.5);
+  }
+  function onEnd() {
+    dragging = false;
+    document.body.style.userSelect = '';
+  }
+
+  // Mouse
+  knob.addEventListener('mousedown', e => { e.preventDefault(); onStart(e.clientY); });
+  window.addEventListener('mousemove', e => onMove(e.clientY));
+  window.addEventListener('mouseup', onEnd);
+
+  // Touch
+  knob.addEventListener('touchstart', e => { e.preventDefault(); onStart(e.touches[0].clientY); }, { passive: false });
+  window.addEventListener('touchmove', e => { if (dragging) onMove(e.touches[0].clientY); }, { passive: true });
+  window.addEventListener('touchend', onEnd);
+});
+</script>
+
+</body>
+</html>
