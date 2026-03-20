@@ -7790,6 +7790,27 @@ class LongPlayStudioV4(QMainWindow):
         )
         self._meter_panels = {}  # track open panels by name
 
+        def _position_panel_clamped(panel, knob_widget):
+            """Position panel near knob, clamped to screen bounds"""
+            from PyQt6.QtWidgets import QApplication
+            pos = knob_widget.mapToGlobal(knob_widget.rect().bottomLeft())
+            screen = QApplication.primaryScreen()
+            if screen:
+                geo = screen.availableGeometry()
+                x = pos.x() - 40
+                if x + panel.width() > geo.right():
+                    x = geo.right() - panel.width() - 10
+                if x < geo.left():
+                    x = geo.left() + 10
+                y = pos.y() + 5
+                if y + panel.height() > geo.bottom():
+                    y = knob_widget.mapToGlobal(knob_widget.rect().topLeft()).y() - panel.height() - 5
+                if y < geo.top():
+                    y = geo.top() + 10
+                panel.move(x, y)
+            else:
+                panel.move(pos.x() - 40, pos.y() + 8)
+
         def _toggle_meter_panel(knob_widget, panel_cls, panel_key):
             """Toggle popup meter panel on right-click"""
             if panel_key in self._meter_panels and self._meter_panels[panel_key].isVisible():
@@ -7797,12 +7818,11 @@ class LongPlayStudioV4(QMainWindow):
                 del self._meter_panels[panel_key]
                 return
             panel = panel_cls(parent=self)
-            # Position near the knob
-            pos = knob_widget.mapToGlobal(knob_widget.rect().bottomLeft())
-            panel.move(pos.x() - 40, pos.y() + 8)
+            _position_panel_clamped(panel, knob_widget)
             panel.closed.connect(lambda k=panel_key: self._meter_panels.pop(k, None))
             self._meter_panels[panel_key] = panel
             panel.show()
+            panel.raise_()
 
         for knob, cls, key in [
             (self.right_width_dial,    ImagerMeterPanel,     "imager"),
@@ -7813,6 +7833,12 @@ class LongPlayStudioV4(QMainWindow):
             knob.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
             knob.customContextMenuRequested.connect(
                 lambda _pos, w=knob, c=cls, k=key: _toggle_meter_panel(w, c, k))
+
+        # ── Meter panel data feed timer (20fps) ──
+        self._meter_panel_timer = QTimer(self)
+        self._meter_panel_timer.setInterval(50)
+        self._meter_panel_timer.timeout.connect(self._feed_meter_panels)
+        self._meter_panel_timer.start()
 
         # ── OUTPUT Ceiling ──
         output_row = QHBoxLayout()
@@ -8912,6 +8938,89 @@ class LongPlayStudioV4(QMainWindow):
             self._master_rerender_timer.setSingleShot(True)
             self._master_rerender_timer.timeout.connect(self._apply_realtime_preview)
         self._master_rerender_timer.start(150)
+
+    def _feed_meter_panels(self):
+        """Feed audio meter data from chain/RT engine to open popup panels (20fps)."""
+        if not hasattr(self, '_meter_panels') or not self._meter_panels:
+            return
+
+        # Gather meter data from chain and knob values
+        chain = getattr(self, '_right_chain', None)
+        rt = getattr(self, '_rt_engine', None)
+
+        # Read current knob values
+        gain_db = self.right_gain_dial.value() if hasattr(self, 'right_gain_dial') else 0.0
+        width_val = self.right_width_dial.value() if hasattr(self, 'right_width_dial') else 100
+        soothe_amt = self.right_soothe_knob.value() if hasattr(self, 'right_soothe_knob') else 0
+        compress_amt = self.right_compress_knob.value() if hasattr(self, 'right_compress_knob') else 0
+        ceiling = self.right_ceiling_spin.value() if hasattr(self, 'right_ceiling_spin') else -1.0
+
+        # Try to get real-time meter data from RT engine
+        rt_data = {}
+        if rt and hasattr(rt, 'get_meter_data'):
+            try:
+                if rt.is_playing():
+                    rt_data = rt.get_meter_data()
+            except Exception:
+                pass
+
+        peak_l = rt_data.get('peak_l', -60.0)
+        peak_r = rt_data.get('peak_r', -60.0)
+        gr_db = rt_data.get('gain_reduction_db', 0.0)
+
+        # Feed Maximizer panel
+        p = self._meter_panels.get("maximizer")
+        if p and p.isVisible():
+            irc_text = "IRC 2"
+            if hasattr(self, 'right_irc_mode'):
+                idx = self.right_irc_mode.currentIndex() if hasattr(self.right_irc_mode, 'currentIndex') else 0
+                irc_text = f"IRC {idx + 1}"
+            p.update_meter(
+                gain_reduction_db=gr_db,
+                output_peak_l=peak_l, output_peak_r=peak_r,
+                lufs=rt_data.get('lufs', -14.0),
+                ceiling=ceiling, irc_mode=irc_text,
+                gain_db=gain_db,
+                true_peak=max(peak_l, peak_r),
+            )
+
+        # Feed Imager panel
+        p = self._meter_panels.get("imager")
+        if p and p.isVisible():
+            vl = rt_data.get('rms_l', 0.0)
+            vr = rt_data.get('rms_r', 0.0)
+            # Estimate correlation from peak data
+            corr = rt_data.get('correlation', 1.0)
+            p.update_meter(
+                width=int(width_val),
+                correlation=corr,
+                vector_l=vl, vector_r=vr,
+            )
+
+        # Feed Soothe panel
+        p = self._meter_panels.get("soothe")
+        if p and p.isVisible():
+            reduction = None
+            if chain and hasattr(chain, 'soothe') and hasattr(chain.soothe, 'get_reduction_spectrum'):
+                try:
+                    reduction = chain.soothe.get_reduction_spectrum()
+                except Exception:
+                    pass
+            p.update_meter(
+                amount=soothe_amt,
+                reduction_db=reduction,
+            )
+
+        # Feed Compressor panel
+        p = self._meter_panels.get("compressor")
+        if p and p.isVisible():
+            comp_gr = rt_data.get('compress_gr', 0.0)
+            p.update_meter(
+                gain_reduction_db=comp_gr,
+                band_gr_low=rt_data.get('band_gr_low', 0.0),
+                band_gr_mid=rt_data.get('band_gr_mid', 0.0),
+                band_gr_high=rt_data.get('band_gr_high', 0.0),
+            )
 
     def _get_right_panel_chain(self):
         """V5.7: Get or create MasterChain for right panel real-time processing."""

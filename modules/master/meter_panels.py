@@ -157,8 +157,17 @@ class BaseMeterPanel(QWidget):
             self.move(event.globalPosition().toPoint() - self._drag_pos)
     
     def mouseReleaseEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            # Hit-test close button (X icon at top-right)
+            click_x = event.position().x()
+            click_y = event.position().y()
+            cx, cy = self.width() - 18, 14
+            if abs(click_x - cx) < 10 and abs(click_y - cy) < 10:
+                self.close()
+                return
         self._drag_pos = None
-    
+        super().mouseReleaseEvent(event)
+
     def _draw_title_bar(self, painter: QPainter):
         """Draw Ozone-style title bar"""
         painter.setPen(Qt.PenStyle.NoPen)
