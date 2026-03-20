@@ -55,6 +55,27 @@ pub struct RtParams {
     pub limiter_ceiling_db: AtomicF32,
     pub limiter_bypass: AtomicBool,
 
+    // -- Resonance Suppressor (Soothe2-style) --
+    pub res_depth: AtomicF32,
+    pub res_sharpness: AtomicF32,
+    pub res_selectivity: AtomicF32,
+    pub res_attack_ms: AtomicF32,
+    pub res_release_ms: AtomicF32,
+    pub res_mode: AtomicI32,        // 0=soft, 1=hard
+    pub res_mix: AtomicF32,         // 0.0–1.0
+    pub res_trim_db: AtomicF32,
+    pub res_delta: AtomicBool,
+    pub res_bypass: AtomicBool,
+
+    // -- Dynamics (Compressor) --
+    pub dyn_threshold: AtomicF32,
+    pub dyn_ratio: AtomicF32,
+    pub dyn_attack_ms: AtomicF32,
+    pub dyn_release_ms: AtomicF32,
+    pub dyn_makeup_db: AtomicF32,
+    pub dyn_knee: AtomicF32,
+    pub dyn_bypass: AtomicBool,
+
     // -- Transport --
     pub volume: AtomicF32,
 
@@ -80,6 +101,27 @@ impl RtParams {
 
             limiter_ceiling_db: AtomicF32::new(-1.0),
             limiter_bypass: AtomicBool::new(false),
+
+            // Resonance Suppressor defaults
+            res_depth: AtomicF32::new(5.0),
+            res_sharpness: AtomicF32::new(4.0),
+            res_selectivity: AtomicF32::new(3.5),
+            res_attack_ms: AtomicF32::new(5.0),
+            res_release_ms: AtomicF32::new(50.0),
+            res_mode: AtomicI32::new(0), // soft
+            res_mix: AtomicF32::new(1.0),
+            res_trim_db: AtomicF32::new(0.0),
+            res_delta: AtomicBool::new(false),
+            res_bypass: AtomicBool::new(true), // bypassed by default
+
+            // Dynamics defaults
+            dyn_threshold: AtomicF32::new(-15.0),
+            dyn_ratio: AtomicF32::new(2.0),
+            dyn_attack_ms: AtomicF32::new(10.0),
+            dyn_release_ms: AtomicF32::new(100.0),
+            dyn_makeup_db: AtomicF32::new(0.0),
+            dyn_knee: AtomicF32::new(6.0),
+            dyn_bypass: AtomicBool::new(true), // bypassed by default
 
             volume: AtomicF32::new(1.0),
 

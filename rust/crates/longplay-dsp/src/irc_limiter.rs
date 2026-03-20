@@ -383,7 +383,7 @@ impl IRCLimiter {
         self.irc1_limiter.set_release(200.0 * release_factor);
         self.irc1_limiter.set_variable_release(false); // Fixed release for consistency
 
-        let result = self.irc1_limiter.process(buffer);
+        let result = self.irc1_limiter.process(buffer, self.sample_rate);
         *buffer = result;
 
         // Copy metering from internal limiter
@@ -590,7 +590,7 @@ impl IRCLimiter {
         let mut total_gr = vec![0.0_f32; num_samples];
 
         for i in 0..4 {
-            limited_bands[i] = self.irc3_limiters[i].process(&bands[i]);
+            limited_bands[i] = self.irc3_limiters[i].process(&bands[i], self.sample_rate);
 
             // Accumulate gain reduction (weighted by band energy)
             let band_gr = self.irc3_limiters[i].gain_reduction();
@@ -666,7 +666,7 @@ impl IRCLimiter {
         self.irc4_limiter.set_release(50.0 * release_factor);
         self.irc4_limiter.set_variable_release(true);
 
-        let result = self.irc4_limiter.process(buffer);
+        let result = self.irc4_limiter.process(buffer, self.sample_rate);
         *buffer = result;
 
         self.gain_reduction_db = self.irc4_limiter.gain_reduction().to_vec();
@@ -795,7 +795,7 @@ impl IRCLimiter {
         let mut total_gr = vec![0.0_f32; num_samples];
 
         for i in 0..4 {
-            limited_bands[i] = self.irc5_limiters[i].process(&bands[i]);
+            limited_bands[i] = self.irc5_limiters[i].process(&bands[i], self.sample_rate);
             let band_gr = self.irc5_limiters[i].gain_reduction();
             for s in 0..num_samples.min(band_gr.len()) {
                 total_gr[s] = total_gr[s].min(band_gr[s]);

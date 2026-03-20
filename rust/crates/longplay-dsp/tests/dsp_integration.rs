@@ -562,7 +562,7 @@ fn test_limiter_ceiling_enforcement() {
     limiter.set_lookahead(0.0);
     limiter.set_attack(1.0);
 
-    let output = limiter.process(&input);
+    let output = limiter.process(&input, SAMPLE_RATE);
     assert_valid_audio(&output, "Limiter ceiling");
 
     let ceiling_linear = 10.0_f32.powf(-6.0 / 20.0);
@@ -585,7 +585,7 @@ fn test_limiter_with_lookahead() {
     limiter.set_lookahead(5.0);
     limiter.set_attack(5.0);
 
-    let output = limiter.process(&input);
+    let output = limiter.process(&input, SAMPLE_RATE);
     assert_valid_audio(&output, "Limiter lookahead");
 
     let ceiling_linear = 10.0_f32.powf(-3.0 / 20.0);
@@ -609,7 +609,7 @@ fn test_limiter_bypass() {
     limiter.set_ceiling(-20.0); // Very low ceiling
     limiter.set_bypass(true);
 
-    let output = limiter.process(&input);
+    let output = limiter.process(&input, SAMPLE_RATE);
     assert_eq!(output, input, "Bypassed limiter should be transparent");
 }
 
@@ -620,7 +620,7 @@ fn test_limiter_gain_reduction_metering() {
     let mut limiter = LookAheadLimiter::new();
     limiter.set_ceiling(-6.0);
 
-    let _output = limiter.process(&input);
+    let _output = limiter.process(&input, SAMPLE_RATE);
 
     let gr = limiter.gain_reduction();
     assert!(!gr.is_empty(), "Gain reduction data should be populated");
@@ -640,7 +640,7 @@ fn test_limiter_handles_silence() {
     let mut limiter = LookAheadLimiter::new();
     limiter.set_ceiling(-6.0);
 
-    let output = limiter.process(&input);
+    let output = limiter.process(&input, SAMPLE_RATE);
     assert_valid_audio(&output, "Limiter silence");
 
     // Silence in = silence out
@@ -655,7 +655,7 @@ fn test_limiter_handles_noise() {
     let mut limiter = LookAheadLimiter::new();
     limiter.set_ceiling(-3.0);
 
-    let output = limiter.process(&input);
+    let output = limiter.process(&input, SAMPLE_RATE);
     assert_valid_audio(&output, "Limiter noise");
 }
 

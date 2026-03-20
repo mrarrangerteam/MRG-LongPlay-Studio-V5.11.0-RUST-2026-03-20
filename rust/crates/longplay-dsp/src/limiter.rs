@@ -130,6 +130,8 @@ pub struct LookAheadLimiter {
     gain_reduction_db: Vec<f32>,
     peak_reduction_db: f64,
     true_peak_detector: TruePeakDetector,
+    /// Preserved release envelope state across blocks (prevents click/pop at block boundaries)
+    release_state: f32,
 }
 
 impl LookAheadLimiter {
@@ -145,6 +147,7 @@ impl LookAheadLimiter {
             gain_reduction_db: Vec::new(),
             peak_reduction_db: 0.0,
             true_peak_detector: TruePeakDetector::new(),
+            release_state: 1.0,
         }
     }
 
@@ -252,11 +255,13 @@ impl LookAheadLimiter {
     }
 
     // Step 5: Smooth release with IIR + variable release
-    fn smooth_release(&self, gr: &[f32], sample_rate: i32) -> Vec<f32> {
+    // Uses self.release_state to preserve envelope across block boundaries
+    fn smooth_release(&mut self, gr: &[f32], sample_rate: i32) -> Vec<f32> {
         let mut smoothed = vec![0.0f32; gr.len()];
         let release_coeff = (-1.0 / (self.release_ms * sample_rate as f64 / 1000.0))
             .exp().clamp(0.0, 1.0);
-        let mut envelope = 1.0_f32;
+        // Use stored state from previous block instead of resetting to 1.0
+        let mut envelope = self.release_state;
         for i in 0..gr.len() {
             if gr[i] < envelope {
                 envelope = gr[i];
@@ -271,6 +276,8 @@ impl LookAheadLimiter {
             }
             smoothed[i] = envelope;
         }
+        // Store final state for next block
+        self.release_state = envelope;
         smoothed
     }
 
@@ -296,9 +303,9 @@ impl LookAheadLimiter {
         output
     }
 
-    /// Process entire buffer offline. Returns limited audio.
-    /// Exact port of C++ LookAheadLimiter::process.
-    pub fn process(&mut self, input: &AudioBuffer) -> AudioBuffer {
+    /// Process entire buffer. Returns limited audio.
+    /// Accepts sample_rate to compute correct lookahead/attack/release timing.
+    pub fn process(&mut self, input: &AudioBuffer, sample_rate: i32) -> AudioBuffer {
         let num_channels = input.len();
         let num_samples = if input.is_empty() { 0 } else { input[0].len() };
 
@@ -313,7 +320,6 @@ impl LookAheadLimiter {
             return input.clone();
         }
 
-        let sample_rate = 44100;
         let ceiling_linear = Self::db_to_linear(self.ceiling_db) as f64;
 
         if self.true_peak { self.true_peak_detector.init(num_channels); }
@@ -346,6 +352,7 @@ impl LookAheadLimiter {
     pub fn reset(&mut self) {
         self.gain_reduction_db.clear();
         self.peak_reduction_db = 0.0;
+        self.release_state = 1.0;
         self.true_peak_detector.reset();
     }
 
@@ -392,7 +399,7 @@ mod tests {
         let mut limiter = LookAheadLimiter::new();
         limiter.set_bypass(true);
         let input = vec![vec![0.5f32; 100]; 2];
-        let output = limiter.process(&input);
+        let output = limiter.process(&input, 44100);
         assert_eq!(output, input);
     }
 
@@ -404,7 +411,7 @@ mod tests {
         limiter.set_attack(1.0);
 
         let input = vec![vec![1.0f32; 1000]; 2];
-        let output = limiter.process(&input);
+        let output = limiter.process(&input, 44100);
 
         let ceiling_linear = 10.0_f32.powf(-6.0 / 20.0);
         for ch in &output {

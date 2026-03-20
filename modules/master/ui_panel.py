@@ -3995,12 +3995,13 @@ class MasterPanel(QWidget):
         scroll.setFrameShape(QFrame.Shape.NoFrame)
 
         self.module_stack = QStackedWidget()
-        self.module_stack.addWidget(self._build_eq_view())        # 0
-        self.module_stack.addWidget(self._build_dynamics_view())  # 1
-        self.module_stack.addWidget(self._build_imager_view())    # 2
-        self.module_stack.addWidget(self._build_maximizer_view()) # 3
-        self.module_stack.addWidget(self._build_ai_view())        # 4
-        self.module_stack.setCurrentIndex(4)  # Default to AI view
+        self.module_stack.addWidget(self._build_resonance_view()) # 0 — RES (Soothe2)
+        self.module_stack.addWidget(self._build_eq_view())        # 1
+        self.module_stack.addWidget(self._build_dynamics_view())  # 2
+        self.module_stack.addWidget(self._build_imager_view())    # 3
+        self.module_stack.addWidget(self._build_maximizer_view()) # 4
+        self.module_stack.addWidget(self._build_ai_view())        # 5
+        self.module_stack.setCurrentIndex(5)  # Default to AI view
         scroll.setWidget(self.module_stack)
         content.addWidget(scroll, stretch=1)
 
@@ -4172,6 +4173,7 @@ class MasterPanel(QWidget):
 
         self.chain_nodes = []
         modules = [
+            ("RES", "SOOTHE", "resonance", C_LED_RED),
             ("EQ", "EQUALIZER", "eq", C_MOD_EQ),
             ("DYN", "DYNAMICS", "dynamics", C_MOD_DYN),
             ("IMG", "IMAGER", "imager", C_MOD_IMG),
@@ -4191,10 +4193,198 @@ class MasterPanel(QWidget):
             self.chain_nodes.append(node)
             layout.addWidget(node)
 
-        # Set AI (index 4) as active by default
-        self.chain_nodes[4].set_active(True)
+        # Set AI (index 5) as active by default
+        self.chain_nodes[5].set_active(True)
 
         return bar
+
+    # ─── RESONANCE SUPPRESSOR VIEW (Soothe2-style) ──────────────────
+    def _build_resonance_view(self):
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        layout.setContentsMargins(20, 16, 20, 16)
+        layout.setSpacing(12)
+
+        # Title + Enable
+        title_row = QHBoxLayout()
+        title_row.addWidget(self._module_title("RESONANCE SUPPRESSOR"))
+        self.res_enabled = QCheckBox("ACTIVE")
+        self.res_enabled.setChecked(True)
+        self.res_enabled.setStyleSheet(f"color:{C_LED_RED}; font-weight:bold;")
+        self.res_enabled.toggled.connect(self._on_res_enabled)
+        title_row.addWidget(self.res_enabled)
+        layout.addLayout(title_row)
+
+        # Description
+        desc = QLabel("Auto-detects and suppresses harsh resonances (Soothe2-style spectral dynamic EQ)")
+        desc.setStyleSheet(f"color:{C_AMBER_DIM}; font-size:9px;")
+        desc.setWordWrap(True)
+        layout.addWidget(desc)
+
+        # Mode selector (Soft / Hard)
+        mode_row = QHBoxLayout()
+        mode_row.addWidget(self._panel_label("MODE"))
+        self.res_mode_combo = QComboBox()
+        self.res_mode_combo.addItems(["soft", "hard"])
+        self.res_mode_combo.setStyleSheet(f"""
+            QComboBox {{
+                background: {C_PANEL_INSET}; color: {C_TEXT};
+                border: 1px solid {C_GROOVE}; border-radius: 3px;
+                padding: 2px 8px; font-size: 10px; font-weight: bold;
+            }}
+        """)
+        self.res_mode_combo.currentTextChanged.connect(self._on_res_mode_changed)
+        mode_row.addWidget(self.res_mode_combo)
+        mode_row.addStretch()
+        layout.addLayout(mode_row)
+
+        # ── KNOB CONTROLS ──
+        knob_style = f"""
+            QDial {{
+                background: {C_PANEL_INSET};
+            }}
+        """
+        value_style = f"color:{C_TEAL_GLOW}; font-family:'Menlo'; font-size:10px; font-weight:bold;"
+        label_style = f"color:{C_GOLD}; font-size:8px; font-weight:bold; letter-spacing:1px;"
+
+        def make_knob_col(name, min_val, max_val, default, decimals, suffix, callback):
+            col = QVBoxLayout()
+            col.setSpacing(2)
+            col.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+            lbl = QLabel(name)
+            lbl.setStyleSheet(label_style)
+            lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            col.addWidget(lbl)
+
+            dial = QDial()
+            dial.setMinimum(int(min_val * (10 ** decimals)))
+            dial.setMaximum(int(max_val * (10 ** decimals)))
+            dial.setValue(int(default * (10 ** decimals)))
+            dial.setFixedSize(48, 48)
+            dial.setStyleSheet(knob_style)
+            dial.setWrapping(False)
+            dial.setNotchesVisible(True)
+            col.addWidget(dial, alignment=Qt.AlignmentFlag.AlignCenter)
+
+            val_label = QLabel(f"{default:.{decimals}f}{suffix}")
+            val_label.setStyleSheet(value_style)
+            val_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            col.addWidget(val_label)
+
+            def on_change(v):
+                real_val = v / (10 ** decimals)
+                val_label.setText(f"{real_val:.{decimals}f}{suffix}")
+                callback(real_val)
+            dial.valueChanged.connect(on_change)
+
+            return col, dial, val_label
+
+        # Row 1: DEPTH, SHARPNESS, SELECTIVITY
+        row1 = QHBoxLayout()
+        row1.setSpacing(16)
+        depth_col, self.res_depth_dial, self.res_depth_val = make_knob_col(
+            "DEPTH", 0, 20, 5.0, 1, " dB", self._on_res_depth)
+        row1.addLayout(depth_col)
+
+        sharp_col, self.res_sharp_dial, self.res_sharp_val = make_knob_col(
+            "SHARPNESS", 1, 10, 4.0, 1, "", self._on_res_sharpness)
+        row1.addLayout(sharp_col)
+
+        sel_col, self.res_sel_dial, self.res_sel_val = make_knob_col(
+            "SELECTIVITY", 1, 10, 3.5, 1, "", self._on_res_selectivity)
+        row1.addLayout(sel_col)
+        layout.addLayout(row1)
+
+        # Row 2: ATTACK, RELEASE, MIX, TRIM
+        row2 = QHBoxLayout()
+        row2.setSpacing(16)
+        att_col, self.res_att_dial, self.res_att_val = make_knob_col(
+            "ATTACK", 0.5, 50, 5.0, 1, " ms", self._on_res_attack)
+        row2.addLayout(att_col)
+
+        rel_col, self.res_rel_dial, self.res_rel_val = make_knob_col(
+            "RELEASE", 5, 500, 50.0, 0, " ms", self._on_res_release)
+        row2.addLayout(rel_col)
+
+        mix_col, self.res_mix_dial, self.res_mix_val = make_knob_col(
+            "MIX", 0, 100, 100, 0, " %", self._on_res_mix)
+        row2.addLayout(mix_col)
+
+        trim_col, self.res_trim_dial, self.res_trim_val = make_knob_col(
+            "TRIM", -12, 12, 0.0, 1, " dB", self._on_res_trim)
+        row2.addLayout(trim_col)
+        layout.addLayout(row2)
+
+        # ── DELTA + BYPASS ──
+        option_row = QHBoxLayout()
+        self.res_delta_cb = QCheckBox("DELTA (listen to removed signal)")
+        self.res_delta_cb.setStyleSheet(f"color:{C_LED_YELLOW}; font-size:9px; font-weight:bold;")
+        self.res_delta_cb.toggled.connect(self._on_res_delta)
+        option_row.addWidget(self.res_delta_cb)
+        option_row.addStretch()
+        layout.addLayout(option_row)
+
+        # ── REDUCTION DISPLAY ──
+        self.res_reduction_label = QLabel("Reduction: — dB")
+        self.res_reduction_label.setStyleSheet(
+            f"color:{C_LED_RED}; font-family:'Menlo'; font-size:11px; font-weight:bold;")
+        layout.addWidget(self.res_reduction_label)
+
+        layout.addStretch()
+        return widget
+
+    # ── Resonance Suppressor Handlers (all functional) ──
+
+    def _on_res_enabled(self, checked):
+        self.chain.resonance_suppressor.enabled = checked
+        if self._rt_engine is not None and _HAS_RT_ENGINE:
+            self._rt_engine.set_res_bypass(not checked)
+
+    def _on_res_mode_changed(self, mode):
+        self.chain.resonance_suppressor.set_mode(mode)
+        if self._rt_engine is not None and _HAS_RT_ENGINE:
+            self._rt_engine.set_res_mode(mode)
+
+    def _on_res_depth(self, val):
+        self.chain.resonance_suppressor.set_depth(val)
+        if self._rt_engine is not None and _HAS_RT_ENGINE:
+            self._rt_engine.set_res_depth(val)
+
+    def _on_res_sharpness(self, val):
+        self.chain.resonance_suppressor.set_sharpness(val)
+        if self._rt_engine is not None and _HAS_RT_ENGINE:
+            self._rt_engine.set_res_sharpness(val)
+
+    def _on_res_selectivity(self, val):
+        self.chain.resonance_suppressor.set_selectivity(val)
+        if self._rt_engine is not None and _HAS_RT_ENGINE:
+            self._rt_engine.set_res_selectivity(val)
+
+    def _on_res_attack(self, val):
+        self.chain.resonance_suppressor.speed_attack = val
+        if self._rt_engine is not None and _HAS_RT_ENGINE:
+            self._rt_engine.set_res_attack(val)
+
+    def _on_res_release(self, val):
+        self.chain.resonance_suppressor.speed_release = val
+        if self._rt_engine is not None and _HAS_RT_ENGINE:
+            self._rt_engine.set_res_release(val)
+
+    def _on_res_mix(self, val):
+        self.chain.resonance_suppressor.mix = val / 100.0
+        if self._rt_engine is not None and _HAS_RT_ENGINE:
+            self._rt_engine.set_res_mix(val)
+
+    def _on_res_trim(self, val):
+        self.chain.resonance_suppressor.set_trim(val)
+        if self._rt_engine is not None and _HAS_RT_ENGINE:
+            self._rt_engine.set_res_trim(val)
+
+    def _on_res_delta(self, checked):
+        self.chain.resonance_suppressor.set_delta(checked)
+        if self._rt_engine is not None and _HAS_RT_ENGINE:
+            self._rt_engine.set_res_delta(checked)
 
     # ─── EQ VIEW ──────────────────────────────
     def _build_eq_view(self):
@@ -4428,7 +4618,11 @@ class MasterPanel(QWidget):
         title_row.addWidget(self._module_title("DYNAMICS COMPRESSOR"))
         self.dyn_enabled = QCheckBox("ACTIVE")
         self.dyn_enabled.setChecked(True)
-        self.dyn_enabled.toggled.connect(lambda v: setattr(self.chain.dynamics, 'enabled', v))
+        def _on_dyn_enabled(v):
+            self.chain.dynamics.enabled = v
+            if self._rt_engine is not None and _HAS_RT_ENGINE:
+                self._rt_engine.set_dyn_bypass(not v)
+        self.dyn_enabled.toggled.connect(_on_dyn_enabled)
         title_row.addWidget(self.dyn_enabled)
         layout.addLayout(title_row)
 
@@ -4502,6 +4696,18 @@ class MasterPanel(QWidget):
                         curve_widget.setMakeup(value)
                     # Update chain dynamics
                     setattr(self.chain.dynamics.single_band, attribute, value)
+                    # V5.10: Forward dynamics params to RT engine
+                    if self._rt_engine is not None and _HAS_RT_ENGINE:
+                        _rt_dyn_map = {
+                            "threshold": self._rt_engine.set_dyn_threshold,
+                            "ratio": self._rt_engine.set_dyn_ratio,
+                            "attack": self._rt_engine.set_dyn_attack,
+                            "release": self._rt_engine.set_dyn_release,
+                            "makeup": self._rt_engine.set_dyn_makeup,
+                            "knee": self._rt_engine.set_dyn_knee,
+                        }
+                        if attribute in _rt_dyn_map:
+                            _rt_dyn_map[attribute](value)
                     # V5.8 A-4: Also update TransferCurve widget
                     if hasattr(self, 'dyn_transfer_curve'):
                         sb = self.chain.dynamics.single_band
@@ -4807,6 +5013,19 @@ class MasterPanel(QWidget):
         self.max_enabled.setStyleSheet(f"color:{C_TEAL}; font-size:9px; font-weight:bold;")
         self.max_enabled.toggled.connect(lambda v: setattr(self.chain.maximizer, 'enabled', v))
         top_row.addWidget(self.max_enabled)
+
+        # ── BYPASS button: toggle between MASTERED / ORIGINAL ──
+        self.max_bypass_btn = QPushButton("● MASTERED")
+        self.max_bypass_btn.setFixedSize(120, 28)
+        self.max_bypass_btn.setCheckable(True)
+        self.max_bypass_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.max_bypass_btn.setStyleSheet(
+            f"QPushButton {{ background: qlineargradient(x1:0,y1:0,x2:0,y2:1, stop:0 #1A3A1A, stop:1 #102A10); "
+            f"border: 2px solid {C_LED_GREEN}; border-radius: 5px; color: {C_LED_GREEN}; "
+            f"font-size: 10px; font-weight: bold; font-family: 'SF Pro Display', 'Menlo', monospace; }}")
+        self.max_bypass_btn.toggled.connect(self._on_max_bypass_toggled)
+        top_row.addWidget(self.max_bypass_btn)
+
         top_row.addStretch()
 
         # IRC Mode dropdown button — teal, Ozone 12 style
@@ -5028,15 +5247,37 @@ class MasterPanel(QWidget):
         """OzoneRotaryKnob Gain changed (0.0-20.0 dB direct)."""
         self.chain.maximizer.set_gain(gain_db)
         self.max_gain_display.setText(f"+{gain_db:.1f}")
-        volume = min(3.0, 0.5 + gain_db / 20.0 * 2.5)
-        if hasattr(self, '_audio_output_master'):
-            self._audio_output_master.setVolume(volume)
-        if hasattr(self, '_audio_output_bypass'):
-            self._audio_output_bypass.setVolume(volume)
+
+        # V5.10: Forward to RT engine for instant real-time feedback
+        if self._rt_engine is not None:
+            self._rt_engine.set_gain(gain_db)
+        else:
+            # Fallback: Instant volume feedback via QAudioOutput
+            volume = min(3.0, 0.5 + gain_db / 20.0 * 2.5)
+            if hasattr(self, '_audio_output_master'):
+                self._audio_output_master.setVolume(volume)
+            if hasattr(self, '_audio_output_bypass'):
+                self._audio_output_bypass.setVolume(volume)
+
+        # Teal → Yellow → Orange → Red color based on gain push
+        if gain_db < 6.0:
+            color = C_TEAL_GLOW
+        elif gain_db < 12.0:
+            color = C_LED_YELLOW
+        elif gain_db < 16.0:
+            color = "#FF8C00"  # Orange
+        else:
+            color = C_LED_RED
+        self.max_gain_display.setStyleSheet(f"color: {color};")
+        self._schedule_auto_measure()
+        self._schedule_auto_preview()
 
     def _on_ceiling_knob_changed(self, value: float):
         """OzoneRotaryKnob Ceiling changed."""
         self.chain.maximizer.set_ceiling(value)
+        # V5.10: Forward to RT engine for instant real-time feedback
+        if self._rt_engine is not None:
+            self._rt_engine.set_ceiling(value)
 
     def _on_character_knob_changed(self, value: float):
         """OzoneRotaryKnob Character changed (0.0-10.0 direct)."""
@@ -5583,31 +5824,37 @@ class MasterPanel(QWidget):
         self._schedule_auto_preview()
 
     def _on_eq_band_changed(self, index: int, gain: float):
-        self.chain.equalizer.set_band(index, gain=gain)
-        self.chain.equalizer.preset_mode = False
-        if index < len(self.eq_band_sliders):
-            _, label = self.eq_band_sliders[index]
-            label.setText(f"{gain:.1f}")
-        # Sync EQ curve display
-        if hasattr(self, 'eq_curve'):
-            self.eq_curve.setGain(index, gain)
-        # V5.10: Real-time engine — instant EQ change
-        if self._rt_engine is not None:
-            self._rt_engine.set_eq_gain(index, gain)
-        self._schedule_auto_preview()
+        try:
+            self.chain.equalizer.set_band(index, gain=gain)
+            self.chain.equalizer.preset_mode = False
+            if index < len(self.eq_band_sliders):
+                _, label = self.eq_band_sliders[index]
+                label.setText(f"{gain:.1f}")
+            # Sync EQ curve display
+            if hasattr(self, 'eq_curve') and self.eq_curve is not None:
+                self.eq_curve.setGain(index, gain)
+            # V5.10: Real-time engine — instant EQ change
+            if self._rt_engine is not None:
+                self._rt_engine.set_eq_gain(index, gain)
+            self._schedule_auto_preview()
+        except Exception as e:
+            print(f"[EQ] Band change error: {e}")
 
     def _on_eq_curve_band_changed(self, band: int, gain_db: float):
         """Called when user drags a band node on the EQ curve widget."""
-        gain_db = round(gain_db, 1)
-        # Update the corresponding slider
-        if 0 <= band < len(self.eq_band_sliders):
-            slider, val_label = self.eq_band_sliders[band]
-            slider.blockSignals(True)
-            slider.setValue(int(gain_db * 10))
-            slider.blockSignals(False)
-            val_label.setText(f"{gain_db:.1f}")
-        # Update the chain
-        self._on_eq_band_changed(band, gain_db)
+        try:
+            gain_db = round(gain_db, 1)
+            # Update the corresponding slider
+            if 0 <= band < len(self.eq_band_sliders):
+                slider, val_label = self.eq_band_sliders[band]
+                slider.blockSignals(True)
+                slider.setValue(int(gain_db * 10))
+                slider.blockSignals(False)
+                val_label.setText(f"{gain_db:.1f}")
+            # Update the chain
+            self._on_eq_band_changed(band, gain_db)
+        except Exception as e:
+            print(f"[EQ] Curve band change error: {e}")
 
     def _on_dyn_mix_changed(self, value: int):
         """Parallel Mix slider → updates dry/wet mix parameter."""
@@ -5644,6 +5891,9 @@ class MasterPanel(QWidget):
                 self.dyn_knobs['threshold'].blockSignals(False)
             if hasattr(self.chain, 'dynamics') and hasattr(self.chain.dynamics, 'single_band'):
                 setattr(self.chain.dynamics.single_band, 'threshold', db)
+            # V5.10: Forward to RT engine
+            if self._rt_engine is not None and _HAS_RT_ENGINE:
+                self._rt_engine.set_dyn_threshold(db)
             self._schedule_auto_preview()
         except Exception as e:
             print(f"[MASTER UI] _on_dyn_curve_threshold_changed error: {e}")
@@ -5657,6 +5907,9 @@ class MasterPanel(QWidget):
                 self.dyn_knobs['ratio'].blockSignals(False)
             if hasattr(self.chain, 'dynamics') and hasattr(self.chain.dynamics, 'single_band'):
                 setattr(self.chain.dynamics.single_band, 'ratio', ratio)
+            # V5.10: Forward to RT engine
+            if self._rt_engine is not None and _HAS_RT_ENGINE:
+                self._rt_engine.set_dyn_ratio(ratio)
             self._schedule_auto_preview()
         except Exception as e:
             print(f"[MASTER UI] _on_dyn_curve_ratio_changed error: {e}")
@@ -5685,6 +5938,35 @@ class MasterPanel(QWidget):
         self._schedule_auto_preview()
 
     # ═══ MAXIMIZER HANDLERS — Ozone 12 Style ═══
+
+    def _on_max_bypass_toggled(self, checked):
+        """Toggle BYPASS on Maximizer header — switch between MASTERED / ORIGINAL."""
+        self._is_bypass_mode = checked
+        self._on_transport_bypass(checked)
+        if checked:
+            self.max_bypass_btn.setText("● ORIGINAL")
+            self.max_bypass_btn.setStyleSheet(
+                f"QPushButton {{ background: qlineargradient(x1:0,y1:0,x2:0,y2:1, stop:0 #332200, stop:1 #221100); "
+                f"border: 2px solid {C_AMBER}; border-radius: 5px; color: {C_AMBER_GLOW}; "
+                f"font-size: 10px; font-weight: bold; font-family: 'SF Pro Display', 'Menlo', monospace; }}")
+        else:
+            self.max_bypass_btn.setText("● MASTERED")
+            self.max_bypass_btn.setStyleSheet(
+                f"QPushButton {{ background: qlineargradient(x1:0,y1:0,x2:0,y2:1, stop:0 #1A3A1A, stop:1 #102A10); "
+                f"border: 2px solid {C_LED_GREEN}; border-radius: 5px; color: {C_LED_GREEN}; "
+                f"font-size: 10px; font-weight: bold; font-family: 'SF Pro Display', 'Menlo', monospace; }}")
+        # Sync with A/B compare button if exists
+        if hasattr(self, 'btn_ab'):
+            if checked:
+                self.btn_ab.setText("▶ ORIGINAL")
+                self.btn_ab.setStyleSheet(
+                    f"QPushButton {{ background: #332200; color: {C_AMBER_GLOW}; font-weight: bold; "
+                    f"font-size: 10px; padding: 6px 12px; border-radius: 3px; border: 1px solid {C_AMBER}; }}")
+            else:
+                self.btn_ab.setText("A/B COMPARE")
+                self.btn_ab.setStyleSheet(
+                    f"QPushButton {{ background: #1A1A1E; color: {C_TEAL_GLOW}; font-weight: bold; "
+                    f"font-size: 10px; padding: 6px 12px; border-radius: 3px; border: 1px solid {C_TEAL_DIM}; }}")
 
     def _show_irc_menu(self):
         """Show IRC mode dropdown menu (Ozone 12 style).
@@ -6244,18 +6526,24 @@ class MasterPanel(QWidget):
     def _on_ab_compare(self):
         """V5.8 E-1: Toggle A/B compare — switch between ORIGINAL and MASTERED playback."""
         self._is_bypass_mode = not self._is_bypass_mode
-        self._on_transport_bypass(self._is_bypass_mode)
-        # Update button text
-        if self._is_bypass_mode:
-            self.btn_ab.setText("▶ ORIGINAL")
-            self.btn_ab.setStyleSheet(
-                f"QPushButton {{ background: #332200; color: {C_AMBER_GLOW}; font-weight: bold; "
-                f"font-size: 10px; padding: 6px 12px; border-radius: 3px; border: 1px solid {C_AMBER}; }}")
+        # Sync Maximizer bypass button (avoid recursive signal)
+        if hasattr(self, 'max_bypass_btn'):
+            self.max_bypass_btn.blockSignals(True)
+            self.max_bypass_btn.setChecked(self._is_bypass_mode)
+            self.max_bypass_btn.blockSignals(False)
+            self._on_max_bypass_toggled(self._is_bypass_mode)
         else:
-            self.btn_ab.setText("A/B COMPARE")
-            self.btn_ab.setStyleSheet(
-                f"QPushButton {{ background: #1A1A1E; color: {C_TEAL_GLOW}; font-weight: bold; "
-                f"font-size: 10px; padding: 6px 12px; border-radius: 3px; border: 1px solid {C_TEAL_DIM}; }}")
+            self._on_transport_bypass(self._is_bypass_mode)
+            if self._is_bypass_mode:
+                self.btn_ab.setText("▶ ORIGINAL")
+                self.btn_ab.setStyleSheet(
+                    f"QPushButton {{ background: #332200; color: {C_AMBER_GLOW}; font-weight: bold; "
+                    f"font-size: 10px; padding: 6px 12px; border-radius: 3px; border: 1px solid {C_AMBER}; }}")
+            else:
+                self.btn_ab.setText("A/B COMPARE")
+                self.btn_ab.setStyleSheet(
+                    f"QPushButton {{ background: #1A1A1E; color: {C_TEAL_GLOW}; font-weight: bold; "
+                    f"font-size: 10px; padding: 6px 12px; border-radius: 3px; border: 1px solid {C_TEAL_DIM}; }}")
 
     def _on_progress(self, percent, status):
         if percent >= 0:
@@ -6437,6 +6725,11 @@ class MasterPanel(QWidget):
 
     def _on_transport_stop(self):
         """Stop playback and reset position."""
+        # V5.10: Reset RT LUFS buffers on stop
+        if hasattr(self, '_rt_lufs_buf'):
+            self._rt_lufs_buf.clear()
+        if hasattr(self, '_rt_lufs_int_acc'):
+            self._rt_lufs_int_acc.clear()
         if self._rt_engine is not None and self._rt_playback_active:
             self._rt_engine.stop()
             self.meters.set_status("⏹ STOPPED", C_AMBER_DIM)
@@ -7070,18 +7363,74 @@ class MasterPanel(QWidget):
             try:
                 if self._rt_engine.is_playing():
                     m = self._rt_engine.get_meter_data()
+                    l_rms = m.get("rms_l", -70.0)
+                    r_rms = m.get("rms_r", -70.0)
                     rt_entry = {
                         "stage": "final",
                         "left_peak_db": m.get("peak_l", -70.0),
                         "right_peak_db": m.get("peak_r", -70.0),
-                        "left_rms_db": m.get("rms_l", -70.0),
-                        "right_rms_db": m.get("rms_r", -70.0),
+                        "left_rms_db": l_rms,
+                        "right_rms_db": r_rms,
                         "gain_reduction_db": m.get("gain_reduction_db", 0.0),
                     }
+
+                    # V5.10 FIX: Estimate LUFS from RMS for RT playback
+                    # LUFS ≈ mono_rms_db - 0.691 (approximate, no K-weighting)
+                    mono_rms_db = 10.0 * math.log10(
+                        (10 ** (l_rms / 10.0) + 10 ** (r_rms / 10.0)) / 2.0
+                    ) if l_rms > -60 and r_rms > -60 else -70.0
+                    lufs_approx = mono_rms_db - 0.691 if mono_rms_db > -60 else -70.0
+
+                    # Accumulate for sliding windows (momentary=400ms, short-term=3s)
+                    if not hasattr(self, '_rt_lufs_buf'):
+                        self._rt_lufs_buf = []       # ~30Hz samples → 12 = 400ms, 90 = 3s
+                        self._rt_lufs_int_acc = []   # all samples for integrated
+                    self._rt_lufs_buf.append(lufs_approx)
+                    self._rt_lufs_int_acc.append(lufs_approx)
+                    if len(self._rt_lufs_buf) > 90:
+                        self._rt_lufs_buf = self._rt_lufs_buf[-90:]
+                    if len(self._rt_lufs_int_acc) > 9000:  # ~5 min
+                        self._rt_lufs_int_acc = self._rt_lufs_int_acc[-9000:]
+
+                    # Momentary: average of last 12 samples (~400ms)
+                    mom_win = self._rt_lufs_buf[-12:] if len(self._rt_lufs_buf) >= 12 else self._rt_lufs_buf
+                    mom_valid = [v for v in mom_win if v > -60]
+                    lufs_mom = sum(mom_valid) / len(mom_valid) if mom_valid else -70.0
+
+                    # Short-term: average of last 90 samples (~3s)
+                    st_win = self._rt_lufs_buf[-90:] if len(self._rt_lufs_buf) >= 90 else self._rt_lufs_buf
+                    st_valid = [v for v in st_win if v > -60]
+                    lufs_short = sum(st_valid) / len(st_valid) if st_valid else -70.0
+
+                    # Integrated: average of all accumulated samples
+                    int_valid = [v for v in self._rt_lufs_int_acc if v > -60]
+                    lufs_int = sum(int_valid) / len(int_valid) if int_valid else -70.0
+
+                    # LRA: estimate from short-term block std deviation
+                    if len(st_valid) >= 2:
+                        import statistics
+                        lu_range = max(0.0, max(st_valid) - min(st_valid))
+                    else:
+                        lu_range = 0.0
+
+                    rt_entry["lufs_momentary"] = lufs_mom
+                    rt_entry["lufs_short_term"] = lufs_short
+                    rt_entry["lufs_integrated"] = lufs_int
+                    rt_entry["lu_range"] = lu_range
+
                     if hasattr(self, 'meters') and hasattr(self.meters, 'update_live_levels'):
                         self.meters.update_live_levels(rt_entry)
                     if hasattr(self, 'max_gr_history') and self.max_gr_history is not None:
                         self.max_gr_history.set_gr(abs(rt_entry.get("gain_reduction_db", 0.0)))
+
+                    # V5.10 FIX: Also feed WLM meter from RT path
+                    if hasattr(self, 'meters') and hasattr(self.meters, 'live_wlm_meter'):
+                        self.meters.live_wlm_meter.set_levels(
+                            momentary=lufs_mom, short_term=lufs_short,
+                            integrated=lufs_int, lra=lu_range,
+                            tp_left=rt_entry["left_peak_db"],
+                            tp_right=rt_entry["right_peak_db"],
+                        )
             except Exception:
                 pass  # Silently skip meter errors
 

@@ -360,13 +360,17 @@ impl Maximizer {
 
     fn apply_soft_clip(&self, buffer: &mut AudioBuffer) {
         if buffer.is_empty() { return; }
-        let drive = (self.soft_clip_pct / 100.0) * 3.0;
-        let mix = self.soft_clip_pct / 100.0;
+        // Match V2 Python formula: drive = 1.0 + amount * 2.0
+        // and normalize with tanh(drive) to preserve output level
+        let amount = self.soft_clip_pct / 100.0;
+        let drive = 1.0 + amount * 2.0;
+        let tanh_drive = drive.tanh();
+        // Safety: tanh_drive is always > 0 for drive > 0
+        let inv_tanh_drive = if tanh_drive > 1e-10 { 1.0 / tanh_drive } else { 1.0 };
         for ch in 0..buffer.len() {
             for i in 0..buffer[ch].len() {
-                let sample = buffer[ch][i] * (1.0 + drive);
-                let clipped = sample.tanh();
-                buffer[ch][i] = sample * (1.0 - mix) + clipped * mix;
+                let driven = buffer[ch][i] * drive;
+                buffer[ch][i] = driven.tanh() * inv_tanh_drive;
             }
         }
     }

@@ -7480,7 +7480,7 @@ class LongPlayStudioV4(QMainWindow):
             }}
         """)
         self.tl_stop_btn.setFixedWidth(120)
-        self.tl_stop_btn.clicked.connect(lambda: self.audio_player.stop())
+        self.tl_stop_btn.clicked.connect(self._on_tl_stop)
         transport_layout.addWidget(self.tl_stop_btn)
 
         transport_layout.addStretch()
@@ -7532,6 +7532,10 @@ class LongPlayStudioV4(QMainWindow):
         # ═══════════════════════════════════════════════
         #  MAXIMIZER — iZotope Ozone 12 Style
         # ═══════════════════════════════════════════════
+        max_header_row = QHBoxLayout()
+        max_header_row.setContentsMargins(0, 0, 0, 0)
+        max_header_row.setSpacing(8)
+
         maximizer_header = QLabel("MAXIMIZER")
         maximizer_header.setStyleSheet("""
             color: #48CAE4;
@@ -7540,9 +7544,48 @@ class LongPlayStudioV4(QMainWindow):
             font-family: 'Menlo', monospace;
             letter-spacing: 3px;
             padding: 4px 0px 3px 0px;
-            border-bottom: 1px solid #00B4D8;
         """)
-        layout.addWidget(maximizer_header)
+        max_header_row.addWidget(maximizer_header)
+        max_header_row.addStretch()
+
+        # ── Original / Mastered toggle ──
+        self._right_bypass_active = False
+        bypass_container = QFrame()
+        bypass_container.setFixedHeight(28)
+        bypass_container.setStyleSheet(
+            "QFrame { background: #1A1A1E; border: 1px solid #2A2A32; border-radius: 14px; }")
+        bypass_lay = QHBoxLayout(bypass_container)
+        bypass_lay.setContentsMargins(2, 2, 2, 2)
+        bypass_lay.setSpacing(0)
+
+        self.btn_original = QPushButton("Original")
+        self.btn_original.setFixedSize(68, 24)
+        self.btn_original.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_original.setStyleSheet(
+            "QPushButton { background: transparent; color: #6B6B70; border: none; "
+            "border-radius: 12px; font-size: 10px; font-weight: bold; font-family: 'Menlo', monospace; }"
+            "QPushButton:hover { color: #FFB340; }")
+        self.btn_original.clicked.connect(lambda: self._on_right_bypass_switch(True))
+        bypass_lay.addWidget(self.btn_original)
+
+        self.btn_mastered = QPushButton("Mastered")
+        self.btn_mastered.setFixedSize(72, 24)
+        self.btn_mastered.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_mastered.setStyleSheet(
+            "QPushButton { background: #48CAE4; color: #0A0A0C; border: none; "
+            "border-radius: 12px; font-size: 10px; font-weight: bold; font-family: 'Menlo', monospace; }"
+            "QPushButton:hover { background: #5AD8F2; }")
+        self.btn_mastered.clicked.connect(lambda: self._on_right_bypass_switch(False))
+        bypass_lay.addWidget(self.btn_mastered)
+
+        max_header_row.addWidget(bypass_container)
+        layout.addLayout(max_header_row)
+
+        # Separator line under header
+        header_line = QFrame()
+        header_line.setFixedHeight(1)
+        header_line.setStyleSheet("background: #00B4D8;")
+        layout.addWidget(header_line)
 
         # ── Mastering Preset dropdown ──
         if _HAS_PRESETS and MASTERING_PRESET_NAMES:
@@ -7624,68 +7667,41 @@ class LongPlayStudioV4(QMainWindow):
         self.right_irc_submode_widget.setVisible(False)  # Hidden by default (IRC 2 has no sub-modes)
         layout.addWidget(self.right_irc_submode_widget)
 
-        # ── Imager (Stereo Width) + Gain Dial — Ozone 12 Style ──
-        dial_style = """
-            QDial {
-                background: qradialgradient(cx:0.5, cy:0.5, radius:0.5,
-                    fx:0.4, fy:0.4,
-                    stop:0 #1A1A20, stop:0.6 #111116,
-                    stop:0.85 #0C0C0E, stop:1 #080808);
-                border: 2px solid %s;
-                border-radius: 30px;
-            }
-        """
+        # ── Imager (Stereo Width) + Gain — OzoneRotaryKnob (custom QPainter) ──
+        # NOTE: QDial + CSS border-radius breaks mouse hit area on macOS/PyQt6.
+        # OzoneRotaryKnob has explicit mousePressEvent/mouseMoveEvent — always works.
+        from modules.widgets.rotary_knob import OzoneRotaryKnob
 
         knobs_section = QHBoxLayout()
         knobs_section.setSpacing(6)
 
-        # ── IMAGER (Stereo Width) ──
-        imager_col = QVBoxLayout()
-        imager_col.setSpacing(1)
-        imager_lbl = QLabel("WIDTH")
-        imager_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        imager_lbl.setStyleSheet("color: #CE93D8; font-size: 7px; letter-spacing: 2px; font-weight: bold; font-family: 'Menlo', monospace;")
-        imager_col.addWidget(imager_lbl)
-
-        self.right_width_dial = QDial()
-        self.right_width_dial.setRange(0, 200)  # 0=mono, 100=normal, 200=wide
-        self.right_width_dial.setValue(100)
-        self.right_width_dial.setFixedSize(60, 60)
-        self.right_width_dial.setNotchesVisible(True)
-        self.right_width_dial.setStyleSheet(dial_style % "#CE93D8")
-        self.right_width_dial.valueChanged.connect(self._on_right_width_changed)
-        imager_col.addWidget(self.right_width_dial, alignment=Qt.AlignmentFlag.AlignCenter)
+        # ── IMAGER (Stereo Width) — OzoneRotaryKnob ──
+        self.right_width_dial = OzoneRotaryKnob(
+            name="WIDTH", min_val=0.0, max_val=200.0, default=100.0,
+            unit="%", decimals=0, large=True)
+        self.right_width_dial.valueChanged.connect(
+            lambda v: self._on_right_width_changed(int(v)))
+        knobs_section.addWidget(self.right_width_dial, alignment=Qt.AlignmentFlag.AlignCenter)
 
         self.right_width_display = QLabel("100%")
         self.right_width_display.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.right_width_display.setFont(QFont("Menlo", 11, QFont.Weight.Bold))
         self.right_width_display.setStyleSheet("color: #CE93D8;")
-        imager_col.addWidget(self.right_width_display)
-        knobs_section.addLayout(imager_col)
+        self.right_width_display.setVisible(False)  # Value shown on knob itself
 
-        # ── GAIN ──
-        gain_col = QVBoxLayout()
-        gain_col.setSpacing(1)
-        gain_lbl = QLabel("GAIN")
-        gain_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        gain_lbl.setStyleSheet("color: #48CAE4; font-size: 7px; letter-spacing: 2px; font-weight: bold; font-family: 'Menlo', monospace;")
-        gain_col.addWidget(gain_lbl)
-
-        self.right_gain_dial = QDial()
-        self.right_gain_dial.setRange(0, 200)  # 0-20 dB
-        self.right_gain_dial.setValue(0)
-        self.right_gain_dial.setFixedSize(60, 60)
-        self.right_gain_dial.setNotchesVisible(True)
-        self.right_gain_dial.setStyleSheet(dial_style % "#00B4D8")
-        self.right_gain_dial.valueChanged.connect(self._on_right_gain_changed)
-        gain_col.addWidget(self.right_gain_dial, alignment=Qt.AlignmentFlag.AlignCenter)
+        # ── GAIN — OzoneRotaryKnob ──
+        self.right_gain_dial = OzoneRotaryKnob(
+            name="GAIN", min_val=0.0, max_val=20.0, default=0.0,
+            unit="dB", decimals=1, large=True)
+        self.right_gain_dial.valueChanged.connect(
+            lambda v: self._on_right_gain_changed(int(v * 10)))
+        knobs_section.addWidget(self.right_gain_dial, alignment=Qt.AlignmentFlag.AlignCenter)
 
         self.right_gain_display = QLabel("+0.0")
         self.right_gain_display.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.right_gain_display.setFont(QFont("Menlo", 11, QFont.Weight.Bold))
         self.right_gain_display.setStyleSheet("color: #48CAE4;")
-        gain_col.addWidget(self.right_gain_display)
-        knobs_section.addLayout(gain_col)
+        self.right_gain_display.setVisible(False)  # Value shown on knob itself
 
         # ── Display column (large dB readout) ──
         display_col = QVBoxLayout()
@@ -7735,6 +7751,58 @@ class LongPlayStudioV4(QMainWindow):
         tp_indicator.setStyleSheet("color: #43A047; font-size: 8px; font-weight: bold; font-family: 'Menlo', monospace;")
         output_row.addWidget(tp_indicator)
         layout.addLayout(output_row)
+
+        # ══ SOOTHE (Auto De-Harsh) — single row: toggle + amount ══
+        soothe_row = QHBoxLayout()
+        soothe_row.setSpacing(4)
+        self.right_res_enabled = QCheckBox("SOOTHE")
+        self.right_res_enabled.setChecked(False)
+        self.right_res_enabled.setStyleSheet(
+            "color: #EF5350; font-size: 9px; font-weight: bold; font-family: 'Menlo';")
+        self.right_res_enabled.setToolTip("Auto-remove harsh resonances (like Soothe2)")
+        self.right_res_enabled.toggled.connect(self._on_right_res_enabled)
+        soothe_row.addWidget(self.right_res_enabled)
+        self.right_res_depth = QSlider(Qt.Orientation.Horizontal)
+        self.right_res_depth.setRange(0, 200)
+        self.right_res_depth.setValue(50)
+        self.right_res_depth.setFixedHeight(16)
+        self.right_res_depth.setToolTip("Amount: 0 = off, 20 = maximum de-harsh")
+        self.right_res_depth.valueChanged.connect(self._on_right_res_depth)
+        soothe_row.addWidget(self.right_res_depth)
+        self.right_res_depth_val = QLabel("5.0")
+        self.right_res_depth_val.setStyleSheet(
+            "color: #EF5350; font-family: 'Menlo'; font-size: 9px; font-weight: bold;")
+        self.right_res_depth_val.setFixedWidth(24)
+        soothe_row.addWidget(self.right_res_depth_val)
+        layout.addLayout(soothe_row)
+        # Hidden defaults for mode/selectivity/mix/delta
+        self.right_res_mode = None
+        self.right_res_mix = None
+        self.right_res_delta = None
+
+        # ══ COMPRESS (Auto Dynamics) — single row: toggle + amount ══
+        comp_row = QHBoxLayout()
+        comp_row.setSpacing(4)
+        self.right_dyn_enabled = QCheckBox("COMPRESS")
+        self.right_dyn_enabled.setChecked(False)
+        self.right_dyn_enabled.setStyleSheet(
+            "color: #FF9800; font-size: 9px; font-weight: bold; font-family: 'Menlo';")
+        self.right_dyn_enabled.setToolTip("Auto compression — glue and control dynamics")
+        self.right_dyn_enabled.toggled.connect(self._on_right_dyn_enabled)
+        comp_row.addWidget(self.right_dyn_enabled)
+        self.right_dyn_amount = QSlider(Qt.Orientation.Horizontal)
+        self.right_dyn_amount.setRange(0, 100)
+        self.right_dyn_amount.setValue(30)
+        self.right_dyn_amount.setFixedHeight(16)
+        self.right_dyn_amount.setToolTip("Amount: 0 = gentle, 100 = heavy compression")
+        self.right_dyn_amount.valueChanged.connect(self._on_right_dyn_amount)
+        comp_row.addWidget(self.right_dyn_amount)
+        self.right_dyn_amount_val = QLabel("30%")
+        self.right_dyn_amount_val.setStyleSheet(
+            "color: #FF9800; font-family: 'Menlo'; font-size: 9px; font-weight: bold;")
+        self.right_dyn_amount_val.setFixedWidth(28)
+        comp_row.addWidget(self.right_dyn_amount_val)
+        layout.addLayout(comp_row)
 
         # ── Gain Reduction History (Ozone 12 waveform) ──
         if _HAS_MASTER_WIDGETS:
@@ -7810,7 +7878,22 @@ class LongPlayStudioV4(QMainWindow):
         self.lufs_target_label = QLabel("")
         self.lufs_target_label.setVisible(False)
 
-        # ── Separator ──
+        # ── Vectorscope (Stereo Width Meter) ──
+        try:
+            from gui.widgets.vectorscope import Vectorscope
+            self.right_vectorscope = Vectorscope()
+            self.right_vectorscope.setFixedSize(140, 140)
+            vs_label = QLabel("STEREO FIELD")
+            vs_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            vs_label.setStyleSheet("color: #00B4D8; font-size: 8px; font-weight: bold; font-family: 'Menlo'; letter-spacing: 2px;")
+            layout.addWidget(vs_label)
+            layout.addWidget(self.right_vectorscope, alignment=Qt.AlignmentFlag.AlignCenter)
+            print("[VECTORSCOPE] ✅ Added to Maximizer panel")
+        except Exception as e:
+            self.right_vectorscope = None
+            print(f"[VECTORSCOPE] Not available: {e}")
+
+        # Separator before DJ Crossfade
         separator = QFrame()
         separator.setFixedHeight(2)
         separator.setStyleSheet("background: qlineargradient(x1:0,y1:0,x2:1,y2:0, stop:0 #0A0A0C, stop:0.5 #3E3E46, stop:1 #0A0A0C);")
@@ -7980,50 +8063,167 @@ class LongPlayStudioV4(QMainWindow):
         track_local_pos = self.audio_player.player.position()
         self.meter.setPosition(track_local_pos)
 
-        # V5.5: Update LUFS displays using REAL audio data when available
+        # V5.10.1: LUFS measurement using pyloudnorm (ITU-R BS.1770-4 compliant)
+        # K-weighted loudness with proper gating, 400ms momentary, 3s short-term
         if self.meter.is_playing:
             import math
-            # Use real dB data from AudioAnalysisEngine if available
+
+            # Initialize LUFS state
+            if not hasattr(self, '_lufs_meter'):
+                try:
+                    import pyloudnorm as pyln
+                    self._lufs_meter = pyln.Meter(48000)  # will update SR on first use
+                    self._lufs_meter_sr = 48000
+                except ImportError:
+                    self._lufs_meter = None
+                    self._lufs_meter_sr = 0
+                self._lufs_mom_buf = []          # 400ms audio buffer
+                self._lufs_short_buf_audio = []  # 3s audio buffer
+                self._lufs_int_blocks = []       # all gated blocks for integrated
+                self._lufs_short_history = []    # short-term history for LRA
+                self._lufs_integrated_val = -70.0
+
+            # Get raw audio samples from AudioAnalysisEngine
+            has_audio_data = (hasattr(self, 'audio_engine') and
+                             self.audio_engine._current_data is not None and
+                             self.audio_engine._has_soundfile)
+
             levels_db = getattr(self.meter, '_last_levels_db', None)
-            if levels_db and levels_db.get("left_rms_db", -70) > -70:
-                # Real audio data — use RMS dB as LUFS approximation
-                avg_rms_db = (levels_db["left_rms_db"] + levels_db["right_rms_db"]) / 2.0
-                momentary_lufs = max(-70.0, min(0.0, avg_rms_db))
-                peak_db = max(levels_db["left_peak_db"], levels_db["right_peak_db"])
-            else:
-                # Fallback: estimate from normalized level
-                avg_level = (self.meter.left_level + self.meter.right_level) / 2.0
-                if avg_level > 0.001:
-                    momentary_lufs = 20 * math.log10(avg_level) - 6.0
+
+            if has_audio_data and self._lufs_meter is not None:
+                import numpy as np
+                import pyloudnorm as pyln
+
+                sr = self.audio_engine._current_sr
+                data = self.audio_engine._current_data
+
+                # Update meter sample rate if changed
+                if sr != self._lufs_meter_sr and sr > 0:
+                    self._lufs_meter = pyln.Meter(sr)
+                    self._lufs_meter_sr = sr
+
+                # Get current position in samples
+                pos_samples = int(track_local_pos / 1000.0 * sr)
+
+                # V5.10: Apply gain+ceiling to LUFS measurement (match actual output)
+                _lufs_gain_db = getattr(self, '_right_gain_db', 0.0)
+                _lufs_ceiling = self.right_ceiling_spin.value() if hasattr(self, 'right_ceiling_spin') else -1.0
+                def _apply_gain_to_chunk(chunk):
+                    if _lufs_gain_db > 0.01:
+                        chunk = chunk * np.float32(10 ** (_lufs_gain_db / 20.0))
+                        ceil_lin = np.float32(10 ** (_lufs_ceiling / 20.0))
+                        np.clip(chunk, -ceil_lin, ceil_lin, out=chunk)
+                    return chunk
+
+                # === Momentary LUFS (400ms window) ===
+                mom_samples = int(sr * 0.4)
+                mom_start = max(0, pos_samples - mom_samples)
+                mom_end = min(len(data), pos_samples)
+                if mom_end - mom_start > 1024:
+                    mom_chunk = data[mom_start:mom_end].copy()
+                    if mom_chunk.ndim == 1:
+                        mom_chunk = np.column_stack([mom_chunk, mom_chunk])
+                    mom_chunk = _apply_gain_to_chunk(mom_chunk)
+                    try:
+                        momentary_lufs = self._lufs_meter.integrated_loudness(mom_chunk)
+                        if np.isinf(momentary_lufs) or np.isnan(momentary_lufs):
+                            momentary_lufs = -70.0
+                    except Exception:
+                        momentary_lufs = -70.0
                 else:
                     momentary_lufs = -70.0
-                momentary_lufs = max(-70.0, min(0.0, momentary_lufs))
-                peak_db = max(
-                    20 * math.log10(self.meter.peak_left) if self.meter.peak_left > 0.001 else -70.0,
-                    20 * math.log10(self.meter.peak_right) if self.meter.peak_right > 0.001 else -70.0,
-                )
 
-            # Short-term: smoothed over ~3 seconds
-            if not hasattr(self, '_lufs_short_buf'):
-                self._lufs_short_buf = []
-                self._lufs_integrated_sum = 0.0
-                self._lufs_integrated_count = 0
-                self._lufs_max = -70.0
-                self._lufs_min = 0.0
-            self._lufs_short_buf.append(momentary_lufs)
-            if len(self._lufs_short_buf) > 90:  # ~3s at 30fps
-                self._lufs_short_buf.pop(0)
-            shortterm_lufs = sum(self._lufs_short_buf) / len(self._lufs_short_buf)
+                # === Short-term LUFS (3s window) ===
+                short_samples = int(sr * 3.0)
+                short_start = max(0, pos_samples - short_samples)
+                short_end = min(len(data), pos_samples)
+                if short_end - short_start > sr:
+                    short_chunk = data[short_start:short_end].copy()
+                    if short_chunk.ndim == 1:
+                        short_chunk = np.column_stack([short_chunk, short_chunk])
+                    short_chunk = _apply_gain_to_chunk(short_chunk)
+                    try:
+                        shortterm_lufs = self._lufs_meter.integrated_loudness(short_chunk)
+                        if np.isinf(shortterm_lufs) or np.isnan(shortterm_lufs):
+                            shortterm_lufs = -70.0
+                    except Exception:
+                        shortterm_lufs = -70.0
+                else:
+                    shortterm_lufs = momentary_lufs
 
-            # Integrated: running average
-            self._lufs_integrated_sum += momentary_lufs
-            self._lufs_integrated_count += 1
-            integrated_lufs = self._lufs_integrated_sum / self._lufs_integrated_count
+                # === Integrated LUFS (from start, gated) ===
+                # Re-measure every 3 seconds to avoid CPU overhead
+                if not hasattr(self, '_lufs_int_last_pos'):
+                    self._lufs_int_last_pos = 0
+                if pos_samples - self._lufs_int_last_pos > sr * 3 or self._lufs_integrated_val <= -70.0:
+                    int_end = min(len(data), pos_samples)
+                    int_samples = min(int_end, sr * 60)  # max 60s lookback
+                    int_start = max(0, int_end - int_samples)
+                    if int_end - int_start > sr:
+                        int_chunk = data[int_start:int_end].copy()
+                        if int_chunk.ndim == 1:
+                            int_chunk = np.column_stack([int_chunk, int_chunk])
+                        int_chunk = _apply_gain_to_chunk(int_chunk)
+                        try:
+                            integrated_lufs = self._lufs_meter.integrated_loudness(int_chunk)
+                            if np.isinf(integrated_lufs) or np.isnan(integrated_lufs):
+                                integrated_lufs = -70.0
+                            self._lufs_integrated_val = integrated_lufs
+                        except Exception:
+                            integrated_lufs = self._lufs_integrated_val
+                    else:
+                        integrated_lufs = self._lufs_integrated_val
+                    self._lufs_int_last_pos = pos_samples
+                else:
+                    integrated_lufs = self._lufs_integrated_val
 
-            # LRA: difference between max and min short-term
-            self._lufs_max = max(self._lufs_max, shortterm_lufs)
-            self._lufs_min = min(self._lufs_min, shortterm_lufs)
-            lra = max(0.0, self._lufs_max - self._lufs_min)
+                # === LRA (10th-95th percentile of short-term history) ===
+                if shortterm_lufs > -70.0:
+                    self._lufs_short_history.append(shortterm_lufs)
+                    # Keep last 120 entries (~2 minutes at ~1/s)
+                    if len(self._lufs_short_history) > 120:
+                        self._lufs_short_history.pop(0)
+                if len(self._lufs_short_history) >= 4:
+                    sorted_st = sorted(self._lufs_short_history)
+                    n = len(sorted_st)
+                    p10 = sorted_st[max(0, int(n * 0.10))]
+                    p95 = sorted_st[min(n - 1, int(n * 0.95))]
+                    lra = max(0.0, p95 - p10)
+                else:
+                    lra = 0.0
+
+                # === True Peak (from peak dB + 0.5 dB headroom for inter-sample) ===
+                if levels_db and levels_db.get("left_peak_db", -70) > -70:
+                    # Approximate True Peak: sample peak + ~0.5 dB for inter-sample peaks
+                    tp_l = levels_db["left_peak_db"]
+                    tp_r = levels_db["right_peak_db"]
+                    peak_db = max(tp_l, tp_r)
+                else:
+                    peak_db = -70.0
+                    tp_l = -70.0
+                    tp_r = -70.0
+
+            else:
+                # Fallback: approximate from RMS levels (no K-weighting)
+                if levels_db and levels_db.get("left_rms_db", -70) > -70:
+                    avg_rms_db = (levels_db["left_rms_db"] + levels_db["right_rms_db"]) / 2.0
+                    momentary_lufs = max(-70.0, min(0.0, avg_rms_db))
+                    peak_db = max(levels_db["left_peak_db"], levels_db["right_peak_db"])
+                    tp_l = levels_db["left_peak_db"]
+                    tp_r = levels_db["right_peak_db"]
+                else:
+                    avg_level = (self.meter.left_level + self.meter.right_level) / 2.0
+                    momentary_lufs = 20 * math.log10(max(avg_level, 1e-10)) - 6.0
+                    momentary_lufs = max(-70.0, min(0.0, momentary_lufs))
+                    peak_db = max(
+                        20 * math.log10(max(self.meter.peak_left, 1e-10)),
+                        20 * math.log10(max(self.meter.peak_right, 1e-10)),
+                    )
+                    tp_l = peak_db
+                    tp_r = peak_db
+                shortterm_lufs = momentary_lufs
+                integrated_lufs = momentary_lufs
+                lra = 0.0
 
             self.lufs_momentary.setValue(momentary_lufs)
             self.lufs_shortterm.setValue(shortterm_lufs)
@@ -8033,8 +8233,6 @@ class LongPlayStudioV4(QMainWindow):
 
             # V5.6: Feed Waves WLM Plus meter
             if hasattr(self, 'right_wlm_meter') and self.right_wlm_meter is not None:
-                tp_l = levels_db.get("left_peak_db", -70.0) if levels_db else peak_db
-                tp_r = levels_db.get("right_peak_db", -70.0) if levels_db else peak_db
                 self.right_wlm_meter.set_levels(
                     momentary=momentary_lufs,
                     short_term=shortterm_lufs,
@@ -8043,6 +8241,23 @@ class LongPlayStudioV4(QMainWindow):
                     tp_left=tp_l,
                     tp_right=tp_r,
                 )
+
+            # V5.10: Feed Vectorscope with audio samples
+            if hasattr(self, 'right_vectorscope') and self.right_vectorscope is not None:
+                if not self.right_vectorscope._timer.isActive():
+                    self.right_vectorscope.start()
+                if has_audio_data:
+                    import numpy as np
+                    sr = self.audio_engine._current_sr
+                    data = self.audio_engine._current_data
+                    pos_s = int(track_local_pos / 1000.0 * sr)
+                    chunk_len = min(512, len(data) - pos_s)
+                    if chunk_len > 0 and pos_s < len(data):
+                        chunk = data[pos_s:pos_s + chunk_len]
+                        if chunk.ndim == 2 and chunk.shape[1] >= 2:
+                            self.right_vectorscope.feed_samples(chunk[:, 0], chunk[:, 1])
+                        elif chunk.ndim == 1:
+                            self.right_vectorscope.feed_samples(chunk, chunk)
 
             # V5.8: Feed Logic Channel Strip BEFORE/AFTER meters
             if hasattr(self, 'right_logic_meter') and self.right_logic_meter is not None:
@@ -8099,23 +8314,23 @@ class LongPlayStudioV4(QMainWindow):
     # V5.5.2: Maximizer Gain — apply gain to AUDIO DATA (not QAudioOutput which caps at 1.0)
     def _on_right_gain_changed(self, value: int):
         """Gain dial changed (0-200 → 0.0-20.0 dB).
-        V5.10: Uses Rust RT engine for instant DSP audio (like Logic/Ozone).
+        V5.10.2: Matches V2 behavior — update meters + QAudioOutput volume instantly.
         """
         gain_db = value / 10.0
         self._right_gain_db = gain_db
 
-        # Update AudioAnalysisEngine for meters
+        # 1. Update AudioAnalysisEngine for meters (same as V2)
         ceiling = self.right_ceiling_spin.value() if hasattr(self, 'right_ceiling_spin') else -1.0
         if hasattr(self, 'audio_engine'):
             self.audio_engine.set_gain(gain_db, ceiling)
 
-        # ★ RUST RT ENGINE: instant DSP audio feedback
-        self._switch_to_rt_engine()
-        if self._rt_engine and self._rt_active:
-            self._rt_engine.set_gain(gain_db)
-            self._rt_engine.set_ceiling(ceiling)
+        # 2. Instant audio feedback via QAudioOutput volume
+        #    Maps 0-20 dB gain to 0.5-3.0 volume (louder as gain increases)
+        volume = max(0.5, min(3.0, 0.5 + gain_db / 20.0 * 2.5))
+        if hasattr(self, 'audio_player') and hasattr(self.audio_player, 'audio_output'):
+            self.audio_player.audio_output.setVolume(volume)
 
-        # Update display
+        # 3. Update display
         if gain_db < 6.0:
             color = "#00CED1"
         elif gain_db < 12.0:
@@ -8131,7 +8346,10 @@ class LongPlayStudioV4(QMainWindow):
             self.right_gain_big.setText(f"+{gain_db:.1f}")
             self.right_gain_big.setStyleSheet(f"color: {color};")
 
-        self._trigger_master_rerender()
+        # 4. Update Logic meter ceiling display
+        if hasattr(self, 'right_logic_meter') and self.right_logic_meter is not None:
+            if hasattr(self.right_logic_meter, 'set_ceiling'):
+                self.right_logic_meter.set_ceiling(ceiling)
 
     def _on_right_ceiling_changed(self, value: float):
         """Output ceiling changed — update RT engine ceiling + meters."""
@@ -8176,6 +8394,135 @@ class LongPlayStudioV4(QMainWindow):
             chain.imager.set_width(width_pct)
 
         self._trigger_master_rerender()
+
+    # ══ Resonance Suppressor Handlers (right panel) ══
+
+    def _on_right_res_enabled(self, checked):
+        chain = self._get_right_panel_chain()
+        if chain and hasattr(chain, 'resonance_suppressor'):
+            chain.resonance_suppressor.enabled = checked
+        try:
+            if self._rt_engine and hasattr(self._rt_engine, 'set_res_bypass'):
+                self._rt_engine.set_res_bypass(not checked)
+        except Exception:
+            pass
+        self._trigger_master_rerender()
+
+    def _on_right_res_depth(self, value):
+        depth = value / 10.0
+        self.right_res_depth_val.setText(f"{depth:.1f}")
+        chain = self._get_right_panel_chain()
+        if chain and hasattr(chain, 'resonance_suppressor'):
+            chain.resonance_suppressor.set_depth(depth)
+            chain.resonance_suppressor.set_selectivity(3.0 + depth * 0.3)
+        try:
+            if self._rt_engine and hasattr(self._rt_engine, 'set_res_depth'):
+                self._rt_engine.set_res_depth(depth)
+                self._rt_engine.set_res_selectivity(3.0 + depth * 0.3)
+        except Exception:
+            pass
+        self._trigger_master_rerender()
+
+    # ══ Dynamics Handlers (right panel — simple amount) ══
+
+    def _on_right_dyn_enabled(self, checked):
+        chain = self._get_right_panel_chain()
+        if chain and hasattr(chain, 'dynamics'):
+            chain.dynamics.enabled = checked
+        try:
+            if self._rt_engine and hasattr(self._rt_engine, 'set_dyn_bypass'):
+                self._rt_engine.set_dyn_bypass(not checked)
+        except Exception:
+            pass
+        self._trigger_master_rerender()
+
+    def _on_right_dyn_amount(self, value):
+        """Simple amount slider → maps to threshold/ratio/attack/release automatically."""
+        pct = value / 100.0
+        self.right_dyn_amount_val.setText(f"{value}%")
+        threshold = -8.0 - pct * 22.0
+        ratio = 1.5 + pct * 6.5
+        attack = 20.0 - pct * 15.0
+        release = 200.0 - pct * 150.0
+        makeup = pct * 8.0
+
+        chain = self._get_right_panel_chain()
+        if chain and hasattr(chain, 'dynamics'):
+            sb = chain.dynamics.single_band
+            sb.threshold = threshold
+            sb.ratio = ratio
+            sb.attack = attack
+            sb.release = release
+            sb.makeup = makeup
+        try:
+            if self._rt_engine and hasattr(self._rt_engine, 'set_dyn_threshold'):
+                self._rt_engine.set_dyn_threshold(threshold)
+                self._rt_engine.set_dyn_ratio(ratio)
+                self._rt_engine.set_dyn_attack(attack)
+                self._rt_engine.set_dyn_release(release)
+                self._rt_engine.set_dyn_makeup(makeup)
+        except Exception:
+            pass
+        self._trigger_master_rerender()
+
+    def _on_right_bypass_switch(self, is_original: bool):
+        """Toggle Original/Mastered bypass on the right panel Maximizer header."""
+        self._right_bypass_active = is_original
+        if is_original:
+            # Show ORIGINAL state — bypass all processing
+            self.btn_original.setStyleSheet(
+                "QPushButton { background: #FF9500; color: #0A0A0C; border: none; "
+                "border-radius: 12px; font-size: 10px; font-weight: bold; font-family: 'Menlo', monospace; }")
+            self.btn_mastered.setStyleSheet(
+                "QPushButton { background: transparent; color: #6B6B70; border: none; "
+                "border-radius: 12px; font-size: 10px; font-weight: bold; font-family: 'Menlo', monospace; }"
+                "QPushButton:hover { color: #48CAE4; }")
+        else:
+            # Show MASTERED state — processing active
+            self.btn_mastered.setStyleSheet(
+                "QPushButton { background: #48CAE4; color: #0A0A0C; border: none; "
+                "border-radius: 12px; font-size: 10px; font-weight: bold; font-family: 'Menlo', monospace; }"
+                "QPushButton:hover { background: #5AD8F2; }")
+            self.btn_original.setStyleSheet(
+                "QPushButton { background: transparent; color: #6B6B70; border: none; "
+                "border-radius: 12px; font-size: 10px; font-weight: bold; font-family: 'Menlo', monospace; }"
+                "QPushButton:hover { color: #FFB340; }")
+
+        # Bypass RT engine processing
+        if self._rt_engine and self._rt_active:
+            try:
+                # Bypass all DSP modules
+                self._rt_engine.set_eq_bypass(is_original)
+                if hasattr(self._rt_engine, 'set_dyn_bypass'):
+                    self._rt_engine.set_dyn_bypass(is_original)
+                if hasattr(self._rt_engine, 'set_res_bypass'):
+                    self._rt_engine.set_res_bypass(is_original)
+                if hasattr(self._rt_engine, 'set_limiter_bypass'):
+                    self._rt_engine.set_limiter_bypass(is_original)
+                # Set gain to 0 when bypassed
+                if is_original:
+                    self._rt_engine.set_gain(0.0)
+                    self._rt_engine.set_width(100)
+                else:
+                    # Restore current settings
+                    gain_db = getattr(self, '_right_gain_db', 0.0)
+                    self._rt_engine.set_gain(gain_db)
+                    width = int(self.right_width_dial.value()) if hasattr(self, 'right_width_dial') else 100
+                    self._rt_engine.set_width(width)
+            except Exception as e:
+                print(f"[BYPASS] RT bypass error: {e}")
+
+        # Also handle QMediaPlayer bypass (dual-player A/B)
+        if hasattr(self, '_is_bypass_mode'):
+            self._is_bypass_mode = is_original
+            if hasattr(self, '_on_transport_bypass'):
+                try:
+                    self._on_transport_bypass(is_original)
+                except Exception:
+                    pass
+
+        mode_str = "ORIGINAL" if is_original else "MASTERED"
+        print(f"[BYPASS] Switched to {mode_str}")
 
     def _on_right_irc_mode_changed(self, mode_name: str):
         """V5.7: IRC mode changed — update sub-mode, sync to chain, trigger re-render."""
@@ -8263,10 +8610,11 @@ class LongPlayStudioV4(QMainWindow):
 
     def _switch_to_rt_engine(self):
         """V5.10: Switch from QMediaPlayer to Rust RT engine for real-time DSP.
-        Completely STOPS QMediaPlayer to avoid audio device conflict.
+        DISABLED auto-switch: RT engine conflicts with QMediaPlayer causing choppy audio.
+        Use offline preview (_trigger_master_rerender) instead.
         """
-        if not self._rt_engine or self._rt_active:
-            return
+        # V5.10.1: Disabled auto-switch — QMediaPlayer + offline preview is more stable
+        return
 
         # Find current audio file
         current_file = None
@@ -8511,7 +8859,9 @@ class LongPlayStudioV4(QMainWindow):
             needs_processing = gain_db > 0.01 or width_pct != 100
             has_preset = (hasattr(self, 'right_mastering_preset') and
                          self.right_mastering_preset.currentText() != "— None —")
-            needs_processing = needs_processing or has_preset
+            has_soothe = hasattr(self, 'right_res_enabled') and self.right_res_enabled.isChecked()
+            has_compress = hasattr(self, 'right_dyn_enabled') and self.right_dyn_enabled.isChecked()
+            needs_processing = needs_processing or has_preset or has_soothe or has_compress
 
             if not needs_processing:
                 # Reset to original file
@@ -8529,9 +8879,11 @@ class LongPlayStudioV4(QMainWindow):
                 return
             if self.audio_engine._current_data is None:
                 return
+            if not hasattr(self, 'audio_player') or self.audio_player is None:
+                return
 
-            was_playing = self.audio_player.is_playing
-            current_pos = self.audio_player.player.position()
+            was_playing = getattr(self.audio_player, 'is_playing', False)
+            current_pos = self.audio_player.player.position() if hasattr(self.audio_player, 'player') else 0
 
             # Get raw audio data from memory (already loaded)
             data = self.audio_engine._current_data
@@ -8551,6 +8903,12 @@ class LongPlayStudioV4(QMainWindow):
                     import numpy as np
                     processed = data.astype(np.float32)
 
+                    # 0. SOOTHE — Resonance Suppressor (before other processing)
+                    if has_soothe:
+                        chain = self._get_right_panel_chain()
+                        if chain and hasattr(chain, 'resonance_suppressor') and chain.resonance_suppressor.enabled:
+                            processed = chain.resonance_suppressor.process(processed)
+
                     # 1. Apply stereo width (M/S processing)
                     if width_pct != 100 and len(processed.shape) > 1 and processed.shape[1] >= 2:
                         mid = (processed[:, 0] + processed[:, 1]) * 0.5
@@ -8564,6 +8922,22 @@ class LongPlayStudioV4(QMainWindow):
                     if gain_db > 0.01:
                         gain_linear = 10 ** (gain_db / 20.0)
                         processed = processed * np.float32(gain_linear)
+
+                    # 2.5 COMPRESS — Dynamics (after gain, before ceiling)
+                    if has_compress:
+                        chain = self._get_right_panel_chain()
+                        if chain and hasattr(chain, 'dynamics') and chain.dynamics.enabled:
+                            try:
+                                from modules.master.resonance_suppressor import AutoDynamicProcessor
+                                auto_dyn = AutoDynamicProcessor(sr)
+                                pct = self.right_dyn_amount.value() / 100.0 if hasattr(self, 'right_dyn_amount') else 0.3
+                                targets = {0.0: "gentle", 0.5: "balanced", 1.0: "aggressive"}
+                                target = "gentle" if pct < 0.33 else ("balanced" if pct < 0.66 else "aggressive")
+                                auto_dyn.set_target(target)
+                                auto_dyn.analyze(processed, sr)
+                                processed = auto_dyn.process(processed)
+                            except Exception as e:
+                                print(f"[COMPRESS] Error: {e}")
 
                     # 3. Apply ceiling limiter (brick-wall)
                     ceiling_linear = np.float32(10 ** (ceiling / 20.0))
@@ -8616,10 +8990,30 @@ class LongPlayStudioV4(QMainWindow):
     # V5.5: Timeline Transport Bar — Play/Pause toggle
     def _on_tl_play_pause(self):
         """Toggle play/pause from timeline transport bar."""
+        # V5.10: Also control RT engine if active
+        if self._rt_engine and self._rt_active:
+            if self._rt_engine.is_playing():
+                self._rt_engine.pause()
+                self.audio_player.pause()  # sync UI state
+            else:
+                self._rt_engine.play()
+            return
         if self.audio_player.is_playing:
             self.audio_player.pause()
         else:
             self.audio_player.play()
+
+    def _on_tl_stop(self):
+        """Stop playback — handles both RT engine and QMediaPlayer."""
+        if self._rt_engine and self._rt_active:
+            self._rt_engine.stop()
+            self._rt_active = False
+            if hasattr(self, '_rt_pos_timer'):
+                self._rt_pos_timer.stop()
+            # Restore QMediaPlayer volume
+            if hasattr(self, 'audio_player') and hasattr(self.audio_player, 'audio_output'):
+                self.audio_player.audio_output.setVolume(1.0)
+        self.audio_player.stop()
 
     def _on_play_state_changed(self, is_playing: bool):
         self.timeline.setPlaying(is_playing)
@@ -10212,9 +10606,84 @@ class LongPlayStudioV4(QMainWindow):
                 background: {Colors.BG_SECONDARY};
             }}
         """)
+        # === Audio I/O Preferences ===
+        audio_group = QGroupBox("🎧 Audio I/O Preferences")
+        audio_group.setStyleSheet(video_group.styleSheet())
+        audio_layout = QVBoxLayout(audio_group)
+
+        try:
+            from PyQt6.QtMultimedia import QMediaDevices
+
+            # Output device
+            out_row = QHBoxLayout()
+            out_lbl = QLabel("Output:")
+            out_lbl.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-weight: bold; min-width: 50px;")
+            out_row.addWidget(out_lbl)
+
+            self._settings_out_combo = QComboBox()
+            self._settings_out_combo.setStyleSheet(f"""
+                QComboBox {{
+                    background: {Colors.BG_TERTIARY}; border: 1px solid {Colors.BORDER};
+                    color: {Colors.TEXT_PRIMARY}; padding: 6px; border-radius: 4px; font-size: 11px;
+                }}
+                QComboBox QAbstractItemView {{
+                    background: #141418; color: #E0DCD4; selection-background-color: #00B4D8;
+                }}
+            """)
+            current_out = None
+            if hasattr(self, 'audio_player') and hasattr(self.audio_player, 'audio_output'):
+                current_out = self.audio_player.audio_output.device().description()
+
+            out_devices = QMediaDevices.audioOutputs()
+            for i, dev in enumerate(out_devices):
+                self._settings_out_combo.addItem(dev.description(), dev.id())
+                if current_out and dev.description() == current_out:
+                    self._settings_out_combo.setCurrentIndex(i)
+
+            def _apply_output(idx):
+                devs = QMediaDevices.audioOutputs()
+                if 0 <= idx < len(devs):
+                    chosen = devs[idx]
+                    if hasattr(self, 'audio_player') and hasattr(self.audio_player, 'audio_output'):
+                        self.audio_player.audio_output.setDevice(chosen)
+                        print(f"[AUDIO] Output → {chosen.description()}")
+
+            self._settings_out_combo.currentIndexChanged.connect(_apply_output)
+            out_row.addWidget(self._settings_out_combo, 1)
+            audio_layout.addLayout(out_row)
+
+            # Input device
+            in_row = QHBoxLayout()
+            in_lbl = QLabel("Input:")
+            in_lbl.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-weight: bold; min-width: 50px;")
+            in_row.addWidget(in_lbl)
+
+            self._settings_in_combo = QComboBox()
+            self._settings_in_combo.setStyleSheet(self._settings_out_combo.styleSheet())
+
+            in_devices = QMediaDevices.audioInputs()
+            for dev in in_devices:
+                self._settings_in_combo.addItem(dev.description(), dev.id())
+
+            in_row.addWidget(self._settings_in_combo, 1)
+            audio_layout.addLayout(in_row)
+
+            # Sample rate info
+            default_out = QMediaDevices.defaultAudioOutput()
+            sr_label = QLabel(f"Default: {default_out.description()}")
+            sr_label.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: 9px; font-style: italic;")
+            audio_layout.addWidget(sr_label)
+
+        except Exception as e:
+            err_lbl = QLabel(f"Audio devices unavailable: {e}")
+            err_lbl.setStyleSheet(f"color: #FF4444; font-size: 10px;")
+            audio_layout.addWidget(err_lbl)
+
+        layout.addWidget(audio_group)
+
         close_btn.clicked.connect(dialog.accept)
         layout.addWidget(close_btn)
-        
+
         dialog.exec()
     
     def _apply_auto_video(self, dialog):

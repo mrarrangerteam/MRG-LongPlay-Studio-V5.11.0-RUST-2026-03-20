@@ -1412,35 +1412,19 @@ class LongPlayStudioV4(QMainWindow):
         self.right_irc_submode_widget.setVisible(False)  # Hidden by default (IRC 2 has no sub-modes)
         layout.addWidget(self.right_irc_submode_widget)
 
-        # ── Gain Dial + Display (Ozone 12 teal theme) ──
+        # ── Gain Knob + Display (OzoneRotaryKnob — custom QPainter) ──
+        # NOTE: QDial + CSS border-radius breaks mouse events on macOS/PyQt6.
+        from modules.widgets.rotary_knob import OzoneRotaryKnob
+
         gain_section = QHBoxLayout()
         gain_section.setSpacing(8)
 
-        gain_dial_col = QVBoxLayout()
-        gain_dial_col.setSpacing(2)
-        gain_lbl = QLabel("GAIN")
-        gain_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        gain_lbl.setStyleSheet("color: #48CAE4; font-size: 8px; letter-spacing: 2px; font-weight: bold; font-family: 'Menlo', monospace;")
-        gain_dial_col.addWidget(gain_lbl)
-
-        self.right_gain_dial = QDial()
-        self.right_gain_dial.setRange(0, 200)  # 0-20 dB
-        self.right_gain_dial.setValue(0)
-        self.right_gain_dial.setFixedSize(80, 80)
-        self.right_gain_dial.setNotchesVisible(True)
-        self.right_gain_dial.setStyleSheet("""
-            QDial {
-                background: qradialgradient(cx:0.5, cy:0.5, radius:0.5,
-                    fx:0.4, fy:0.4,
-                    stop:0 #1A1A20, stop:0.6 #111116,
-                    stop:0.85 #0C0C0E, stop:1 #080808);
-                border: 2px solid #00B4D8;
-                border-radius: 40px;
-            }
-        """)
-        self.right_gain_dial.valueChanged.connect(self._on_right_gain_changed)
-        gain_dial_col.addWidget(self.right_gain_dial, alignment=Qt.AlignmentFlag.AlignCenter)
-        gain_section.addLayout(gain_dial_col)
+        self.right_gain_dial = OzoneRotaryKnob(
+            name="GAIN", min_val=0.0, max_val=20.0, default=0.0,
+            unit="dB", decimals=1, large=True)
+        self.right_gain_dial.valueChanged.connect(
+            lambda v: self._on_right_gain_changed(int(v * 10)))
+        gain_section.addWidget(self.right_gain_dial, alignment=Qt.AlignmentFlag.AlignCenter)
 
         # Gain display
         gain_info_col = QVBoxLayout()
@@ -1787,50 +1771,146 @@ class LongPlayStudioV4(QMainWindow):
         track_local_pos = self.audio_player.player.position()
         self.meter.setPosition(track_local_pos)
 
-        # V5.5: Update LUFS displays using REAL audio data when available
+        # V5.10.1: LUFS measurement using pyloudnorm (ITU-R BS.1770-4 K-weighted)
         if self.meter.is_playing:
             import math
-            # Use real dB data from AudioAnalysisEngine if available
+
+            # Initialize LUFS state once
+            if not hasattr(self, '_lufs_pyln'):
+                try:
+                    import pyloudnorm as pyln
+                    self._lufs_pyln = pyln
+                except ImportError:
+                    self._lufs_pyln = None
+                self._lufs_meter_obj = None
+                self._lufs_short_history = []
+                self._lufs_int_last_pos = 0
+                self._lufs_integrated_val = -70.0
+
             levels_db = getattr(self.meter, '_last_levels_db', None)
-            if levels_db and levels_db.get("left_rms_db", -70) > -70:
-                # Real audio data — use RMS dB as LUFS approximation
-                avg_rms_db = (levels_db["left_rms_db"] + levels_db["right_rms_db"]) / 2.0
-                momentary_lufs = max(-70.0, min(0.0, avg_rms_db))
-                peak_db = max(levels_db["left_peak_db"], levels_db["right_peak_db"])
-            else:
-                # Fallback: estimate from normalized level
-                avg_level = (self.meter.left_level + self.meter.right_level) / 2.0
-                if avg_level > 0.001:
-                    momentary_lufs = 20 * math.log10(avg_level) - 6.0
+
+            # Auto-load current track into audio_engine if not loaded yet
+            if (hasattr(self, 'audio_engine') and self.audio_engine._current_data is None
+                    and hasattr(self, 'audio_player') and self.audio_player.files):
+                idx = self.audio_player.current_file_index
+                if 0 <= idx < len(self.audio_player.files):
+                    try:
+                        self.audio_engine.load_file(self.audio_player.files[idx])
+                        print(f"[LUFS] Auto-loaded track for metering")
+                    except Exception:
+                        pass
+
+            has_audio = (hasattr(self, 'audio_engine') and
+                        self.audio_engine._current_data is not None and
+                        self._lufs_pyln is not None)
+
+            if has_audio:
+                import numpy as np
+                sr = self.audio_engine._current_sr
+                data = self.audio_engine._current_data
+
+                # Create/update meter for this sample rate
+                if self._lufs_meter_obj is None or getattr(self, '_lufs_sr', 0) != sr:
+                    self._lufs_meter_obj = self._lufs_pyln.Meter(sr)
+                    self._lufs_sr = sr
+
+                pos_samples = int(track_local_pos / 1000.0 * sr)
+
+                # === Momentary LUFS (400ms K-weighted) ===
+                mom_n = int(sr * 0.4)
+                mom_start = max(0, pos_samples - mom_n)
+                mom_end = min(len(data), pos_samples)
+                if mom_end - mom_start > 2048:
+                    chunk = data[mom_start:mom_end]
+                    if chunk.ndim == 1:
+                        chunk = np.column_stack([chunk, chunk])
+                    try:
+                        momentary_lufs = self._lufs_meter_obj.integrated_loudness(chunk)
+                        if np.isinf(momentary_lufs) or np.isnan(momentary_lufs):
+                            momentary_lufs = -70.0
+                    except Exception:
+                        momentary_lufs = -70.0
                 else:
                     momentary_lufs = -70.0
-                momentary_lufs = max(-70.0, min(0.0, momentary_lufs))
-                peak_db = max(
-                    20 * math.log10(self.meter.peak_left) if self.meter.peak_left > 0.001 else -70.0,
-                    20 * math.log10(self.meter.peak_right) if self.meter.peak_right > 0.001 else -70.0,
-                )
 
-            # Short-term: smoothed over ~3 seconds
-            if not hasattr(self, '_lufs_short_buf'):
-                self._lufs_short_buf = []
-                self._lufs_integrated_sum = 0.0
-                self._lufs_integrated_count = 0
-                self._lufs_max = -70.0
-                self._lufs_min = 0.0
-            self._lufs_short_buf.append(momentary_lufs)
-            if len(self._lufs_short_buf) > 90:  # ~3s at 30fps
-                self._lufs_short_buf.pop(0)
-            shortterm_lufs = sum(self._lufs_short_buf) / len(self._lufs_short_buf)
+                # === Short-term LUFS (3s K-weighted) ===
+                short_n = int(sr * 3.0)
+                short_start = max(0, pos_samples - short_n)
+                short_end = min(len(data), pos_samples)
+                if short_end - short_start > sr:
+                    chunk = data[short_start:short_end]
+                    if chunk.ndim == 1:
+                        chunk = np.column_stack([chunk, chunk])
+                    try:
+                        shortterm_lufs = self._lufs_meter_obj.integrated_loudness(chunk)
+                        if np.isinf(shortterm_lufs) or np.isnan(shortterm_lufs):
+                            shortterm_lufs = -70.0
+                    except Exception:
+                        shortterm_lufs = momentary_lufs
+                else:
+                    shortterm_lufs = momentary_lufs
 
-            # Integrated: running average
-            self._lufs_integrated_sum += momentary_lufs
-            self._lufs_integrated_count += 1
-            integrated_lufs = self._lufs_integrated_sum / self._lufs_integrated_count
+                # === Integrated LUFS (gated, from start — update every 3s) ===
+                if pos_samples - self._lufs_int_last_pos > sr * 3 or self._lufs_integrated_val <= -70.0:
+                    int_end = min(len(data), pos_samples)
+                    int_n = min(int_end, sr * 60)
+                    int_start = max(0, int_end - int_n)
+                    if int_end - int_start > sr:
+                        chunk = data[int_start:int_end]
+                        if chunk.ndim == 1:
+                            chunk = np.column_stack([chunk, chunk])
+                        try:
+                            integrated_lufs = self._lufs_meter_obj.integrated_loudness(chunk)
+                            if np.isinf(integrated_lufs) or np.isnan(integrated_lufs):
+                                integrated_lufs = -70.0
+                            self._lufs_integrated_val = integrated_lufs
+                        except Exception:
+                            integrated_lufs = self._lufs_integrated_val
+                    else:
+                        integrated_lufs = self._lufs_integrated_val
+                    self._lufs_int_last_pos = pos_samples
+                else:
+                    integrated_lufs = self._lufs_integrated_val
 
-            # LRA: difference between max and min short-term
-            self._lufs_max = max(self._lufs_max, shortterm_lufs)
-            self._lufs_min = min(self._lufs_min, shortterm_lufs)
-            lra = max(0.0, self._lufs_max - self._lufs_min)
+                # === LRA (10th-95th percentile of short-term) ===
+                if shortterm_lufs > -70.0:
+                    self._lufs_short_history.append(shortterm_lufs)
+                    if len(self._lufs_short_history) > 120:
+                        self._lufs_short_history.pop(0)
+                if len(self._lufs_short_history) >= 4:
+                    s = sorted(self._lufs_short_history)
+                    n = len(s)
+                    lra = max(0.0, s[min(n-1, int(n*0.95))] - s[max(0, int(n*0.10))])
+                else:
+                    lra = 0.0
+
+                # === True Peak ===
+                if levels_db and levels_db.get("left_peak_db", -70) > -70:
+                    tp_l = levels_db["left_peak_db"]
+                    tp_r = levels_db["right_peak_db"]
+                    peak_db = max(tp_l, tp_r)
+                else:
+                    peak_db = -70.0
+                    tp_l = tp_r = -70.0
+
+            else:
+                # Fallback: RMS approximation (no pyloudnorm)
+                if levels_db and levels_db.get("left_rms_db", -70) > -70:
+                    avg_rms = (levels_db["left_rms_db"] + levels_db["right_rms_db"]) / 2.0
+                    momentary_lufs = max(-70.0, min(0.0, avg_rms))
+                    peak_db = max(levels_db["left_peak_db"], levels_db["right_peak_db"])
+                else:
+                    avg_level = (self.meter.left_level + self.meter.right_level) / 2.0
+                    momentary_lufs = 20 * math.log10(max(avg_level, 1e-10)) - 6.0
+                    momentary_lufs = max(-70.0, min(0.0, momentary_lufs))
+                    peak_db = max(
+                        20 * math.log10(max(self.meter.peak_left, 1e-10)),
+                        20 * math.log10(max(self.meter.peak_right, 1e-10)),
+                    )
+                tp_l = tp_r = peak_db
+                shortterm_lufs = momentary_lufs
+                integrated_lufs = momentary_lufs
+                lra = 0.0
 
             self.lufs_momentary.setValue(momentary_lufs)
             self.lufs_shortterm.setValue(shortterm_lufs)
@@ -1840,8 +1920,6 @@ class LongPlayStudioV4(QMainWindow):
 
             # V5.6: Feed Waves WLM Plus meter
             if hasattr(self, 'right_wlm_meter') and self.right_wlm_meter is not None:
-                tp_l = levels_db.get("left_peak_db", -70.0) if levels_db else peak_db
-                tp_r = levels_db.get("right_peak_db", -70.0) if levels_db else peak_db
                 self.right_wlm_meter.set_levels(
                     momentary=momentary_lufs,
                     short_term=shortterm_lufs,
@@ -2106,6 +2184,21 @@ class LongPlayStudioV4(QMainWindow):
 
             if not hasattr(self, 'audio_engine') or not self.audio_engine._has_soundfile:
                 return
+
+            # Auto-load current track if not yet in memory
+            if self.audio_engine._current_data is None:
+                current_file = None
+                if hasattr(self, 'audio_player') and self.audio_player.files:
+                    idx = self.audio_player.current_file_index
+                    if 0 <= idx < len(self.audio_player.files):
+                        current_file = self.audio_player.files[idx]
+                elif hasattr(self, 'audio_files') and self.audio_files:
+                    current_file = self.audio_files[0].path
+                if current_file and os.path.exists(current_file):
+                    self.audio_engine.load_file(current_file)
+                    print(f"[MASTER] Auto-loaded: {os.path.basename(current_file)}")
+                else:
+                    return
             if self.audio_engine._current_data is None:
                 return
 

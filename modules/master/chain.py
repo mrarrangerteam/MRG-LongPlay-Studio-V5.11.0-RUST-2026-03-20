@@ -27,6 +27,7 @@ import numpy as np
 from typing import Optional, Dict, List, Callable, Tuple
 
 # Original module imports (unchanged)
+from .resonance_suppressor import ResonanceSuppressor
 from .equalizer import Equalizer
 from .dynamics import Dynamics
 from .imager import Imager
@@ -833,7 +834,8 @@ class MasterChain:
         self.output_path = None
         self.preview_path = None
 
-        # Modules (signal flow order) — SAME as original
+        # Modules (signal flow order) — ResSup → EQ → DYN → IMG → MAX
+        self.resonance_suppressor = ResonanceSuppressor()
         self.equalizer = Equalizer()
         self.dynamics = Dynamics()
         self.imager = Imager()
@@ -1033,6 +1035,14 @@ class MasterChain:
         # V5.8: Send pre-chain meter data (input signal BEFORE any processing)
         self._send_meter(result, sr, "pre_chain")
 
+        # Step 0.5: Resonance Suppressor (before EQ — clean harsh resonances first)
+        if callback:
+            callback(7, "Suppressing resonances...")
+        if self.resonance_suppressor.enabled:
+            result = self.resonance_suppressor.process(result.astype(np.float32)).astype(np.float64)
+            result = np.nan_to_num(result, nan=0.0, posinf=0.99, neginf=-0.99)
+        self._send_meter(result, sr, "post_resonance")
+
         # Step 1: EQ
         if callback:
             callback(10, "Applying EQ...")
@@ -1124,49 +1134,74 @@ class MasterChain:
                     levels["gain_reduction_db"] = 0.0
 
                 # V5.5: LUFS measurement with correct key names
+                # V5.10 FIX: Integrated uses FULL audio, LRA computed properly
                 if HAS_PYLOUDNORM:
                     try:
+                        meter = pyln.Meter(sr)
+
+                        def _ensure_stereo(buf):
+                            if buf.ndim == 1:
+                                return np.column_stack([buf, buf])
+                            return buf
+
+                        def _safe_lufs(buf):
+                            val = meter.integrated_loudness(buf)
+                            if val == float('-inf') or val < -70:
+                                return -70.0
+                            return val
+
                         # Momentary LUFS (last 400ms)
                         mom_samples = min(len(data), int(sr * 0.4))
                         if mom_samples > 1024:
-                            mom_buf = data[-mom_samples:]
-                            if mom_buf.ndim == 1:
-                                mom_buf = np.column_stack([mom_buf, mom_buf])
-                            meter = pyln.Meter(sr)
-                            lufs_mom = meter.integrated_loudness(mom_buf)
-                            if lufs_mom == float('-inf') or lufs_mom < -70:
-                                lufs_mom = -70.0
+                            lufs_mom = _safe_lufs(_ensure_stereo(data[-mom_samples:]))
                             levels["lufs_momentary"] = lufs_mom
 
                         # Short-term LUFS (last 3 seconds)
                         short_samples = min(len(data), int(sr * 3.0))
                         if short_samples > sr:
-                            short_buf = data[-short_samples:]
-                            if short_buf.ndim == 1:
-                                short_buf = np.column_stack([short_buf, short_buf])
-                            meter = pyln.Meter(sr)
-                            lufs_short = meter.integrated_loudness(short_buf)
-                            if lufs_short == float('-inf') or lufs_short < -70:
-                                lufs_short = -70.0
+                            lufs_short = _safe_lufs(_ensure_stereo(data[-short_samples:]))
                             levels["lufs_short_term"] = lufs_short
 
-                        # Integrated LUFS (full processed audio so far)
-                        int_samples = min(len(data), sr * 10)
-                        if int_samples > sr:
-                            int_buf = data[-int_samples:]
-                            if int_buf.ndim == 1:
-                                int_buf = np.column_stack([int_buf, int_buf])
-                            meter = pyln.Meter(sr)
-                            lufs_int = meter.integrated_loudness(int_buf)
-                            if lufs_int == float('-inf') or lufs_int < -70:
-                                lufs_int = -70.0
+                        # Integrated LUFS — FULL audio (not just last 10s)
+                        if len(data) > sr:
+                            full_stereo = _ensure_stereo(data)
+                            lufs_int = _safe_lufs(full_stereo)
                             levels["lufs_integrated"] = lufs_int
                             levels["lufs"] = lufs_int  # backward compat
+
+                        # V5.10: Loudness Range (LRA) — ITU-R BS.1770-4
+                        # Divide into 3s blocks stepping every 1s, compute per-block LUFS,
+                        # apply absolute + relative gates, LRA = P95 - P10
+                        block_len = int(sr * 3.0)
+                        step_len = int(sr * 1.0)
+                        if len(data) >= block_len:
+                            full_stereo = _ensure_stereo(data)
+                            st_values = []
+                            for start in range(0, len(full_stereo) - block_len + 1, step_len):
+                                blk = full_stereo[start:start + block_len]
+                                val = meter.integrated_loudness(blk)
+                                if val != float('-inf') and val > -70:
+                                    st_values.append(val)
+                            if len(st_values) >= 2:
+                                # Absolute gate: discard blocks < -70 LUFS (already done above)
+                                # Relative gate: mean of ungated, then discard < mean - 20 LU
+                                ungated_mean = np.mean(st_values)
+                                gated = [v for v in st_values if v >= ungated_mean - 20.0]
+                                if len(gated) >= 2:
+                                    gated_sorted = sorted(gated)
+                                    p10 = np.percentile(gated_sorted, 10)
+                                    p95 = np.percentile(gated_sorted, 95)
+                                    levels["lu_range"] = max(0.0, p95 - p10)
+                                else:
+                                    levels["lu_range"] = 0.0
+                            else:
+                                levels["lu_range"] = 0.0
                     except Exception:
                         levels["lufs_momentary"] = -70.0
                         levels["lufs_short_term"] = -70.0
                         levels["lufs_integrated"] = -70.0
                         levels["lufs"] = -70.0
+                        levels["lu_range"] = 0.0
 
                 with self._meter_lock:
                     self._meter_callback(levels)
@@ -1529,6 +1564,7 @@ class MasterChain:
                 "normalize_loudness": self.normalize_loudness,
                 "platform": self.platform,
             },
+            "resonance_suppressor": self.resonance_suppressor.get_settings_dict(),
             "equalizer": self.equalizer.get_settings_dict(),
             "dynamics": self.dynamics.get_settings_dict(),
             "imager": self.imager.get_settings_dict(),
@@ -1554,6 +1590,8 @@ class MasterChain:
             self.platform = chain_data.get("platform", "YouTube")
             if "equalizer" in data:
                 self.equalizer.load_settings_dict(data["equalizer"])
+            if "resonance_suppressor" in data:
+                self.resonance_suppressor.load_settings_dict(data["resonance_suppressor"])
             if "dynamics" in data:
                 self.dynamics.load_settings_dict(data["dynamics"])
             if "imager" in data:
@@ -1568,6 +1606,7 @@ class MasterChain:
 
     def reset_all(self):
         """Reset all modules to default settings."""
+        self.resonance_suppressor = ResonanceSuppressor()
         self.equalizer = Equalizer()
         self.dynamics = Dynamics()
         self.imager = Imager()

@@ -123,6 +123,95 @@ impl PyRtEngine {
         self.inner.set_volume(volume);
     }
 
+    // ========== Resonance Suppressor (Soothe2-style) ==========
+
+    /// Set resonance suppressor depth (0-20 dB). Instant, lock-free.
+    fn set_res_depth(&self, depth: f32) {
+        self.inner.set_res_depth(depth);
+    }
+
+    /// Set resonance suppressor sharpness (1-10). Instant, lock-free.
+    fn set_res_sharpness(&self, val: f32) {
+        self.inner.set_res_sharpness(val);
+    }
+
+    /// Set resonance suppressor selectivity (1-10). Instant, lock-free.
+    fn set_res_selectivity(&self, val: f32) {
+        self.inner.set_res_selectivity(val);
+    }
+
+    /// Set resonance suppressor attack (0.5-50 ms). Instant, lock-free.
+    fn set_res_attack(&self, ms: f32) {
+        self.inner.set_res_attack(ms);
+    }
+
+    /// Set resonance suppressor release (5-500 ms). Instant, lock-free.
+    fn set_res_release(&self, ms: f32) {
+        self.inner.set_res_release(ms);
+    }
+
+    /// Set resonance suppressor mode ("soft" or "hard"). Instant, lock-free.
+    fn set_res_mode(&self, mode: &str) {
+        self.inner.set_res_mode(mode);
+    }
+
+    /// Set resonance suppressor wet/dry mix (0-100%). Instant, lock-free.
+    fn set_res_mix(&self, mix_pct: f32) {
+        self.inner.set_res_mix(mix_pct);
+    }
+
+    /// Set resonance suppressor trim (-12 to +12 dB). Instant, lock-free.
+    fn set_res_trim(&self, db: f32) {
+        self.inner.set_res_trim(db);
+    }
+
+    /// Set resonance suppressor delta mode. Instant, lock-free.
+    fn set_res_delta(&self, enabled: bool) {
+        self.inner.set_res_delta(enabled);
+    }
+
+    /// Set resonance suppressor bypass. Instant, lock-free.
+    fn set_res_bypass(&self, bypass: bool) {
+        self.inner.set_res_bypass(bypass);
+    }
+
+    // ========== Dynamics (Compressor) ==========
+
+    /// Set dynamics threshold (-60 to 0 dB). Instant, lock-free.
+    fn set_dyn_threshold(&self, db: f32) {
+        self.inner.set_dyn_threshold(db);
+    }
+
+    /// Set dynamics ratio (1-20). Instant, lock-free.
+    fn set_dyn_ratio(&self, ratio: f32) {
+        self.inner.set_dyn_ratio(ratio);
+    }
+
+    /// Set dynamics attack (0.1-100 ms). Instant, lock-free.
+    fn set_dyn_attack(&self, ms: f32) {
+        self.inner.set_dyn_attack(ms);
+    }
+
+    /// Set dynamics release (1-1000 ms). Instant, lock-free.
+    fn set_dyn_release(&self, ms: f32) {
+        self.inner.set_dyn_release(ms);
+    }
+
+    /// Set dynamics makeup gain (-12 to +24 dB). Instant, lock-free.
+    fn set_dyn_makeup(&self, db: f32) {
+        self.inner.set_dyn_makeup(db);
+    }
+
+    /// Set dynamics knee (0-20 dB). Instant, lock-free.
+    fn set_dyn_knee(&self, db: f32) {
+        self.inner.set_dyn_knee(db);
+    }
+
+    /// Set dynamics bypass. Instant, lock-free.
+    fn set_dyn_bypass(&self, bypass: bool) {
+        self.inner.set_dyn_bypass(bypass);
+    }
+
     /// Get latest meter data as a dict.
     ///
     /// Returns: {

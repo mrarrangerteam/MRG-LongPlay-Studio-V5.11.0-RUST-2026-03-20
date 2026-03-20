@@ -219,6 +219,96 @@ impl RtEngine {
         self.params.volume.store(volume.clamp(0.0, 2.0));
     }
 
+    // ========== Resonance Suppressor ==========
+
+    pub fn set_res_depth(&self, depth: f32) {
+        self.params.res_depth.store(depth.clamp(0.0, 20.0));
+        self.params.mark_dirty();
+    }
+
+    pub fn set_res_sharpness(&self, val: f32) {
+        self.params.res_sharpness.store(val.clamp(1.0, 10.0));
+        self.params.mark_dirty();
+    }
+
+    pub fn set_res_selectivity(&self, val: f32) {
+        self.params.res_selectivity.store(val.clamp(1.0, 10.0));
+        self.params.mark_dirty();
+    }
+
+    pub fn set_res_attack(&self, ms: f32) {
+        self.params.res_attack_ms.store(ms.clamp(0.5, 50.0));
+        self.params.mark_dirty();
+    }
+
+    pub fn set_res_release(&self, ms: f32) {
+        self.params.res_release_ms.store(ms.clamp(5.0, 500.0));
+        self.params.mark_dirty();
+    }
+
+    pub fn set_res_mode(&self, mode: &str) {
+        let mode_int = if mode == "hard" || mode == "Hard" { 1 } else { 0 };
+        self.params.res_mode.store(mode_int, Ordering::Relaxed);
+        self.params.mark_dirty();
+    }
+
+    pub fn set_res_mix(&self, mix_pct: f32) {
+        self.params.res_mix.store((mix_pct / 100.0).clamp(0.0, 1.0));
+        self.params.mark_dirty();
+    }
+
+    pub fn set_res_trim(&self, db: f32) {
+        self.params.res_trim_db.store(db.clamp(-12.0, 12.0));
+        self.params.mark_dirty();
+    }
+
+    pub fn set_res_delta(&self, enabled: bool) {
+        self.params.res_delta.store(enabled, Ordering::Relaxed);
+        self.params.mark_dirty();
+    }
+
+    pub fn set_res_bypass(&self, bypass: bool) {
+        self.params.res_bypass.store(bypass, Ordering::Relaxed);
+        self.params.mark_dirty();
+    }
+
+    // ========== Dynamics (Compressor) ==========
+
+    pub fn set_dyn_threshold(&self, db: f32) {
+        self.params.dyn_threshold.store(db.clamp(-60.0, 0.0));
+        self.params.mark_dirty();
+    }
+
+    pub fn set_dyn_ratio(&self, ratio: f32) {
+        self.params.dyn_ratio.store(ratio.clamp(1.0, 20.0));
+        self.params.mark_dirty();
+    }
+
+    pub fn set_dyn_attack(&self, ms: f32) {
+        self.params.dyn_attack_ms.store(ms.clamp(0.1, 100.0));
+        self.params.mark_dirty();
+    }
+
+    pub fn set_dyn_release(&self, ms: f32) {
+        self.params.dyn_release_ms.store(ms.clamp(1.0, 1000.0));
+        self.params.mark_dirty();
+    }
+
+    pub fn set_dyn_makeup(&self, db: f32) {
+        self.params.dyn_makeup_db.store(db.clamp(-12.0, 24.0));
+        self.params.mark_dirty();
+    }
+
+    pub fn set_dyn_knee(&self, db: f32) {
+        self.params.dyn_knee.store(db.clamp(0.0, 20.0));
+        self.params.mark_dirty();
+    }
+
+    pub fn set_dyn_bypass(&self, bypass: bool) {
+        self.params.dyn_bypass.store(bypass, Ordering::Relaxed);
+        self.params.mark_dirty();
+    }
+
     // ========== Meter data ==========
 
     /// Poll latest meter data. Returns the most recent MeterData.

@@ -11,9 +11,11 @@ use cpal::{Device, SampleFormat, Stream, StreamConfig};
 use crossbeam_channel::Sender;
 
 use longplay_dsp::equalizer::Equalizer;
+use longplay_dsp::dynamics::Dynamics;
 use longplay_dsp::imager::Imager;
 use longplay_dsp::maximizer::Maximizer;
 use longplay_dsp::limiter::LookAheadLimiter;
+use longplay_dsp::resonance_suppressor::ResonanceSuppressor;
 
 use crate::params::RtParams;
 
@@ -126,7 +128,9 @@ impl AudioStream {
         let total_frames = state.total_frames;
 
         // DSP chain lives inside the audio callback closure
+        let mut resonance_suppressor = ResonanceSuppressor::new();
         let mut equalizer = Equalizer::new();
+        let mut dynamics = Dynamics::new();
         let mut imager = Imager::new();
         let mut maximizer = Maximizer::new();
         let mut limiter = LookAheadLimiter::new();
@@ -151,14 +155,16 @@ impl AudioStream {
                         return;
                     }
 
-                    let current_pos = position.load(Ordering::Relaxed);
+                    let mut current_pos = position.load(Ordering::Relaxed);
                     let num_output_frames = data.len() / output_channels;
 
                     // Check if params changed and apply to DSP modules
                     if params.take_dirty() {
                         apply_params_to_dsp(
                             &params,
+                            &mut resonance_suppressor,
                             &mut equalizer,
+                            &mut dynamics,
                             &mut imager,
                             &mut maximizer,
                             &mut limiter,
@@ -167,77 +173,113 @@ impl AudioStream {
 
                     let volume = params.volume.load();
 
-                    // Read source audio into a block buffer
-                    let block_frames = num_output_frames.min(BLOCK_SIZE);
-                    let mut block_l = vec![0.0f32; block_frames];
-                    let mut block_r = vec![0.0f32; block_frames];
-
-                    for i in 0..block_frames {
-                        let src_pos = ((current_pos as f64 + i as f64 * src_ratio) as u64)
-                            .min(total_frames.saturating_sub(1));
-                        let idx = src_pos as usize;
-                        if idx < audio_l.len() {
-                            block_l[i] = audio_l[idx];
-                            block_r[i] = audio_r[idx];
-                        }
-                    }
-
-                    // Build AudioBuffer (deinterleaved: Vec<Vec<f32>>)
-                    let mut buffer = vec![block_l, block_r];
-                    let sr = target_sample_rate as i32;
-
-                    // DSP chain: EQ → Imager → Maximizer (includes IRC limiter) → Limiter
-                    equalizer.process_in_place(&mut buffer, sr);
-                    imager.process(&mut buffer, sr);
-                    maximizer.process(&mut buffer, sr);
-
-                    if !limiter.is_bypassed() {
-                        let limited = limiter.process(&buffer);
-                        buffer = limited;
-                    }
-
-                    // Metering
+                    // Metering accumulators
                     let mut peak_l: f32 = 0.0;
                     let mut peak_r: f32 = 0.0;
                     let mut sum_sq_l: f32 = 0.0;
                     let mut sum_sq_r: f32 = 0.0;
 
-                    // Write to output interleaved + compute meters
-                    for i in 0..num_output_frames {
-                        let src_i = i.min(block_frames.saturating_sub(1));
-                        let l = if src_i < buffer[0].len() {
-                            buffer[0][src_i] * volume
-                        } else {
-                            0.0
-                        };
-                        let r = if src_i < buffer[1].len() {
-                            buffer[1][src_i] * volume
-                        } else {
-                            0.0
-                        };
+                    // Process multiple DSP blocks to fill the entire output buffer.
+                    // Previously only one block was processed, causing sample repetition
+                    // when cpal requested more frames than BLOCK_SIZE.
+                    let mut frames_written: usize = 0;
+                    let sr = target_sample_rate as i32;
 
-                        peak_l = peak_l.max(l.abs());
-                        peak_r = peak_r.max(r.abs());
-                        sum_sq_l += l * l;
-                        sum_sq_r += r * r;
+                    // Pre-allocate block buffers outside loop (avoid heap alloc per block)
+                    let mut block_l = vec![0.0f32; BLOCK_SIZE];
+                    let mut block_r = vec![0.0f32; BLOCK_SIZE];
 
-                        let base = i * output_channels;
-                        if base < data.len() {
-                            data[base] = l;
-                            if output_channels > 1 && base + 1 < data.len() {
-                                data[base + 1] = r;
+                    while frames_written < num_output_frames {
+                        let remaining = num_output_frames - frames_written;
+                        let block_frames = remaining.min(BLOCK_SIZE);
+
+                        // Zero and fill block from source audio
+                        for s in block_l[..block_frames].iter_mut() { *s = 0.0; }
+                        for s in block_r[..block_frames].iter_mut() { *s = 0.0; }
+                        for i in 0..block_frames {
+                            let src_pos = ((current_pos as f64 + i as f64 * src_ratio) as u64)
+                                .min(total_frames.saturating_sub(1));
+                            let idx = src_pos as usize;
+                            if idx < audio_l.len() {
+                                block_l[i] = audio_l[idx];
+                                block_r[i] = audio_r[idx];
                             }
+                        }
+
+                        // Build AudioBuffer (deinterleaved) — slice to actual block size
+                        let mut buffer = vec![
+                            block_l[..block_frames].to_vec(),
+                            block_r[..block_frames].to_vec(),
+                        ];
+
+                        // Pre-gain headroom: -3 dB (matches V2 Python chain)
+                        // Prevents clipping before the DSP chain on hot input signals
+                        // (e.g. Suno/Udio tracks at -8.6 dB RMS)
+                        const PRE_GAIN_LINEAR: f32 = 0.7079; // 10^(-3/20)
+                        for ch in buffer.iter_mut() {
+                            for s in ch.iter_mut() {
+                                *s *= PRE_GAIN_LINEAR;
+                            }
+                        }
+
+                        // DSP chain: ResSup → EQ → Dynamics → Imager → Maximizer → Limiter
+                        resonance_suppressor.process(&mut buffer, sr);
+                        equalizer.process_in_place(&mut buffer, sr);
+                        let buffer_dyn = dynamics.process(&buffer, sr);
+                        buffer = buffer_dyn;
+                        imager.process(&mut buffer, sr);
+                        maximizer.process(&mut buffer, sr);
+
+                        if !limiter.is_bypassed() {
+                            let limited = limiter.process(&buffer, sr);
+                            buffer = limited;
+                        }
+
+                        // Write processed block to output + compute meters
+                        for i in 0..block_frames {
+                            let l = buffer[0][i] * volume;
+                            let r = buffer[1][i] * volume;
+
+                            peak_l = peak_l.max(l.abs());
+                            peak_r = peak_r.max(r.abs());
+                            sum_sq_l += l * l;
+                            sum_sq_r += r * r;
+
+                            let base = (frames_written + i) * output_channels;
+                            if base < data.len() {
+                                data[base] = l;
+                                if output_channels > 1 && base + 1 < data.len() {
+                                    data[base + 1] = r;
+                                }
+                            }
+                        }
+
+                        // Advance position per block
+                        let advance = (block_frames as f64 * src_ratio) as u64;
+                        current_pos += advance;
+                        frames_written += block_frames;
+
+                        if current_pos >= total_frames {
+                            // Fill remaining output with silence
+                            for j in frames_written..num_output_frames {
+                                let base = j * output_channels;
+                                if base < data.len() {
+                                    data[base] = 0.0;
+                                    if output_channels > 1 && base + 1 < data.len() {
+                                        data[base + 1] = 0.0;
+                                    }
+                                }
+                            }
+                            position.store(0, Ordering::Relaxed);
+                            playing.store(false, Ordering::Relaxed);
+                            frames_written = num_output_frames; // exit loop
+                            break;
                         }
                     }
 
-                    // Advance position
-                    let advance = (num_output_frames as f64 * src_ratio) as u64;
-                    let new_pos = current_pos + advance;
-                    if new_pos >= total_frames {
-                        position.store(0, Ordering::Relaxed);
-                        playing.store(false, Ordering::Relaxed);
-                    } else {
-                        position.store(new_pos, Ordering::Relaxed);
+                    // Update final position
+                    if current_pos < total_frames {
+                        position.store(current_pos, Ordering::Relaxed);
                     }
 
                     // Send meter data at ~30Hz
@@ -311,11 +353,35 @@ impl AudioStream {
 /// Called in the audio callback when `dirty` flag is set.
 fn apply_params_to_dsp(
     params: &RtParams,
+    resonance_suppressor: &mut ResonanceSuppressor,
     equalizer: &mut Equalizer,
+    dynamics: &mut Dynamics,
     imager: &mut Imager,
     maximizer: &mut Maximizer,
     limiter: &mut LookAheadLimiter,
 ) {
+    // Resonance Suppressor
+    resonance_suppressor.set_bypass(params.res_bypass.load(Ordering::Relaxed));
+    resonance_suppressor.set_depth(params.res_depth.load());
+    resonance_suppressor.set_sharpness(params.res_sharpness.load());
+    resonance_suppressor.set_selectivity(params.res_selectivity.load());
+    resonance_suppressor.set_attack(params.res_attack_ms.load());
+    resonance_suppressor.set_release(params.res_release_ms.load());
+    resonance_suppressor.set_mix(params.res_mix.load());
+    resonance_suppressor.set_trim(params.res_trim_db.load());
+    resonance_suppressor.set_delta(params.res_delta.load(Ordering::Relaxed));
+    let res_mode = params.res_mode.load(Ordering::Relaxed);
+    resonance_suppressor.set_mode_str(if res_mode == 1 { "hard" } else { "soft" });
+
+    // Dynamics (Compressor)
+    dynamics.set_bypass(params.dyn_bypass.load(Ordering::Relaxed));
+    dynamics.single_band_mut().set_threshold(params.dyn_threshold.load() as f64);
+    dynamics.single_band_mut().set_ratio(params.dyn_ratio.load() as f64);
+    dynamics.single_band_mut().set_attack(params.dyn_attack_ms.load() as f64);
+    dynamics.single_band_mut().set_release(params.dyn_release_ms.load() as f64);
+    dynamics.single_band_mut().set_makeup_gain(params.dyn_makeup_db.load() as f64);
+    dynamics.single_band_mut().set_knee(params.dyn_knee.load() as f64);
+
     // EQ
     equalizer.set_bypass(params.eq_bypass.load(Ordering::Relaxed));
     for i in 0..8 {
