@@ -9601,12 +9601,16 @@ class LongPlayStudioV4(QMainWindow):
                                 print(f"[COMPRESS] Error: {e}")
 
                     # 3. V5.11.0 FIX: True Peak limiter (not just sample clip)
+                    ceiling_linear = np.float32(10 ** (ceiling / 20.0))
                     try:
-                        from modules.master.chain import _RealAudioProcessor
-                        processed = _RealAudioProcessor.final_true_peak_limit(
-                            processed, sr, ceiling_db=ceiling)
-                    except Exception:
-                        ceiling_linear = np.float32(10 ** (ceiling / 20.0))
+                        if processed is not None and len(processed) > 0 and not np.any(np.isnan(processed)):
+                            from modules.master.chain import _RealAudioProcessor
+                            processed = _RealAudioProcessor.final_true_peak_limit(
+                                processed, sr, ceiling_db=ceiling)
+                        else:
+                            np.clip(processed, -ceiling_linear, ceiling_linear, out=processed)
+                    except Exception as e:
+                        print(f"[TRUE PEAK] Fallback to clip: {e}")
                         np.clip(processed, -ceiling_linear, ceiling_linear, out=processed)
 
                     # 4. Write to temp WAV (float32 for speed)

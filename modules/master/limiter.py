@@ -107,12 +107,20 @@ class LookAheadLimiter:
             return audio
 
         # Ensure 2D: (samples, channels)
+        if audio is None or len(audio) == 0:
+            return audio
+
         was_mono = audio.ndim == 1
         if was_mono:
             audio = audio[:, np.newaxis]
 
         result = audio.copy().astype(np.float64)
         n_samples, n_channels = result.shape
+
+        # Safety: too short to process
+        if n_samples < 4:
+            np.clip(result, -self.ceiling_linear, self.ceiling_linear, out=result)
+            return result[:, 0] if was_mono else result
 
         # ─── Step 1: Compute peak envelope across all channels ───
         peak_envelope = np.max(np.abs(result), axis=1)  # (samples,)
@@ -235,9 +243,10 @@ class LookAheadLimiter:
                     for i in range(chunk_len):
                         os_start = i * 4
                         os_end = min(os_start + 4, os_len)
-                        os_peak = np.max(np.abs(oversampled[os_start:os_end]))
-                        peak_envelope[start + i] = max(
-                            peak_envelope[start + i], os_peak)
+                        if os_end > os_start and os_start < os_len:
+                            os_peak = np.max(np.abs(oversampled[os_start:os_end]))
+                            peak_envelope[start + i] = max(
+                                peak_envelope[start + i], os_peak)
                 except Exception:
                     pass  # Fallback to sample peaks already in envelope
 
