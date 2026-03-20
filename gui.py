@@ -7711,18 +7711,19 @@ class LongPlayStudioV4(QMainWindow):
         self.right_irc_submode_widget.setVisible(False)  # Hidden by default (IRC 2 has no sub-modes)
         layout.addWidget(self.right_irc_submode_widget)
 
-        # ── Imager (Stereo Width) + Gain — OzoneRotaryKnob (custom QPainter) ──
+        # ── WIDTH → SOOTHE → COMPRESS → GAIN — single row of 4 OzoneRotaryKnobs ──
         # NOTE: QDial + CSS border-radius breaks mouse hit area on macOS/PyQt6.
         # OzoneRotaryKnob has explicit mousePressEvent/mouseMoveEvent — always works.
         from modules.widgets.rotary_knob import OzoneRotaryKnob
 
         knobs_section = QHBoxLayout()
-        knobs_section.setSpacing(6)
+        knobs_section.setSpacing(4)
 
-        # ── IMAGER (Stereo Width) — OzoneRotaryKnob ──
+        # ── 1. WIDTH (Stereo Imager) ──
         self.right_width_dial = OzoneRotaryKnob(
             name="WIDTH", min_val=0.0, max_val=200.0, default=100.0,
-            unit="%", decimals=0, large=True)
+            unit="%", decimals=0)
+        self.right_width_dial.setFixedSize(55, 55)
         self.right_width_dial.valueChanged.connect(
             lambda v: self._on_right_width_changed(int(v)))
         knobs_section.addWidget(self.right_width_dial, alignment=Qt.AlignmentFlag.AlignCenter)
@@ -7733,10 +7734,27 @@ class LongPlayStudioV4(QMainWindow):
         self.right_width_display.setStyleSheet("color: #CE93D8;")
         self.right_width_display.setVisible(False)  # Value shown on knob itself
 
-        # ── GAIN — OzoneRotaryKnob ──
+        # ── 2. SOOTHE ──
+        self.right_soothe_knob = OzoneRotaryKnob(
+            name="SOOTHE", min_val=0.0, max_val=100.0, default=0.0,
+            unit="%", decimals=0)
+        self.right_soothe_knob.setFixedSize(55, 55)
+        self.right_soothe_knob.valueChanged.connect(self._on_soothe_knob_changed)
+        knobs_section.addWidget(self.right_soothe_knob, alignment=Qt.AlignmentFlag.AlignCenter)
+
+        # ── 3. COMPRESS ──
+        self.right_compress_knob = OzoneRotaryKnob(
+            name="COMPRESS", min_val=0.0, max_val=100.0, default=0.0,
+            unit="%", decimals=0)
+        self.right_compress_knob.setFixedSize(55, 55)
+        self.right_compress_knob.valueChanged.connect(self._on_compress_knob_changed)
+        knobs_section.addWidget(self.right_compress_knob, alignment=Qt.AlignmentFlag.AlignCenter)
+
+        # ── 4. GAIN (last, next to dB readout) ──
         self.right_gain_dial = OzoneRotaryKnob(
             name="GAIN", min_val=0.0, max_val=20.0, default=0.0,
-            unit="dB", decimals=1, large=True)
+            unit="dB", decimals=1)
+        self.right_gain_dial.setFixedSize(55, 55)
         self.right_gain_dial.valueChanged.connect(
             lambda v: self._on_right_gain_changed(int(v * 10)))
         knobs_section.addWidget(self.right_gain_dial, alignment=Qt.AlignmentFlag.AlignCenter)
@@ -7796,25 +7814,7 @@ class LongPlayStudioV4(QMainWindow):
         output_row.addWidget(tp_indicator)
         layout.addLayout(output_row)
 
-        # ══ SOOTHE + COMPRESS — Knob row (matches WIDTH/GAIN style) ══
-        sc_knobs_row = QHBoxLayout()
-        sc_knobs_row.setSpacing(6)
-
-        # ── SOOTHE knob ──
-        self.right_soothe_knob = OzoneRotaryKnob(
-            name="SOOTHE", min_val=0.0, max_val=100.0, default=0.0,
-            unit="%", decimals=0)
-        self.right_soothe_knob.valueChanged.connect(self._on_soothe_knob_changed)
-        sc_knobs_row.addWidget(self.right_soothe_knob, alignment=Qt.AlignmentFlag.AlignCenter)
-
-        # ── COMPRESS knob ──
-        self.right_compress_knob = OzoneRotaryKnob(
-            name="COMPRESS", min_val=0.0, max_val=100.0, default=0.0,
-            unit="%", decimals=0)
-        self.right_compress_knob.valueChanged.connect(self._on_compress_knob_changed)
-        sc_knobs_row.addWidget(self.right_compress_knob, alignment=Qt.AlignmentFlag.AlignCenter)
-
-        layout.addLayout(sc_knobs_row)
+        # (SOOTHE + COMPRESS knobs are now in knobs_section above)
 
         # Backward compat: keep old refs working
         self.right_res_enabled = type('Obj', (), {'isChecked': lambda s: self.right_soothe_knob.value() > 0, 'setChecked': lambda s, v: None})()
