@@ -939,7 +939,7 @@ class ImagerMeterPanel(BaseMeterPanel):
     def paintEvent(self, event):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        
+
         # Background
         bg_grad = QLinearGradient(0, 0, 0, self.height())
         bg_grad.setColorAt(0, QColor(12, 14, 18))
@@ -950,89 +950,122 @@ class ImagerMeterPanel(BaseMeterPanel):
         p.drawRoundedRect(1, 1, self.width() - 2, self.height() - 2, 6, 6)
         self._draw_title_bar(p)
 
-        # ─── Stereo Width Curve ───
+        # ─── iZotope Imager-style: Symmetric L/Center/R Stereo Field ───
         curve_rect = QRectF(50, 44, 380, 220)
         p.setPen(Qt.PenStyle.NoPen)
         p.setBrush(OzoneColors.BG_PANEL)
         p.drawRoundedRect(curve_rect, 4, 4)
 
-        # V5.10.6: Spectrum behind width curve (Ozone 12 style)
-        self._draw_spectrum(p, curve_rect, alpha=50)
+        cx = curve_rect.x()
+        cy = curve_rect.y()
+        cw = curve_rect.width()
+        ch = curve_rect.height()
+        center_x = cx + cw / 2  # Center line (mono)
 
-        # Frequency grid
+        # Spectrum behind (subtle)
+        self._draw_spectrum(p, curve_rect, alpha=35)
+
+        # Frequency grid (vertical — log frequency axis, bottom to top)
         freq_labels = [20, 50, 100, 200, 500, "1k", "2k", "5k", "10k", "20k"]
         freq_values = [20, 50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000]
-        
+        log_min, log_max = np.log10(20), np.log10(20000)
+
         for freq, label in zip(freq_values, freq_labels):
-            x = curve_rect.x() + curve_rect.width() * (np.log10(freq) - np.log10(20)) / (np.log10(20000) - np.log10(20))
+            y = cy + ch - ch * (np.log10(freq) - log_min) / (log_max - log_min)
             p.setPen(QPen(OzoneColors.GRID_LINE, 0.5))
-            p.drawLine(int(x), int(curve_rect.y()), int(x), int(curve_rect.y() + curve_rect.height()))
+            p.drawLine(int(cx), int(y), int(cx + cw), int(y))
             p.setPen(OzoneColors.TEXT_TERTIARY)
-            p.setFont(QFont("SF Pro Display", 7))
-            p.drawText(int(x - 10), int(curve_rect.y() + curve_rect.height() + 12), str(label))
-        
-        # dB grid (width: -6 to +6 dB)
-        for db in [-6, -3, 0, 3, 6]:
-            y = curve_rect.y() + curve_rect.height() * (1.0 - (db + 6) / 12.0)
-            p.setPen(QPen(OzoneColors.GRID_LINE if db != 0 else OzoneColors.GRID_LINE_MAJOR, 0.5))
-            p.drawLine(int(curve_rect.x()), int(y), int(curve_rect.x() + curve_rect.width()), int(y))
-            p.setPen(OzoneColors.TEXT_TERTIARY)
-            p.setFont(QFont("SF Pro Display", 8))
-            p.drawText(int(curve_rect.x() - 24), int(y + 3), f"{db:+.0f}")
-        
-        # Width curve (filled area like Ozone)
+            p.setFont(QFont("SF Pro Display", 6))
+            p.drawText(int(cx - 22), int(y + 3), str(label))
+
+        # L / C / R labels at top
+        p.setPen(OzoneColors.TEXT_SECONDARY)
+        p.setFont(QFont("Menlo", 8, QFont.Weight.Bold))
+        p.drawText(int(cx + 8), int(cy - 2), "L")
+        p.drawText(int(center_x - 3), int(cy - 2), "C")
+        p.drawText(int(cx + cw - 14), int(cy - 2), "R")
+
+        # Center line (mono reference)
+        p.setPen(QPen(OzoneColors.GRID_LINE_MAJOR, 1.0))
+        p.drawLine(int(center_x), int(cy), int(center_x), int(cy + ch))
+
+        # Width markers
+        for pct in [25, 50, 75]:
+            offset = cw / 2 * pct / 100
+            p.setPen(QPen(OzoneColors.GRID_LINE, 0.5, Qt.PenStyle.DotLine))
+            p.drawLine(int(center_x - offset), int(cy), int(center_x - offset), int(cy + ch))
+            p.drawLine(int(center_x + offset), int(cy), int(center_x + offset), int(cy + ch))
+
+        # ─── Butterfly/Mirror stereo width display ───
         width_factor = (self._width_value - 100) / 100.0  # -1 to +1
-        
-        path = QPainterPath()
-        zero_y = curve_rect.y() + curve_rect.height() * 0.5  # 0dB line
-        
-        path.moveTo(curve_rect.x(), zero_y)
-        
+
+        # Build symmetric butterfly shape (L and R wings)
+        left_path = QPainterPath()
+        right_path = QPainterPath()
+
         for i, freq in enumerate(self._spectral_freqs):
-            x = curve_rect.x() + curve_rect.width() * (np.log10(freq) - np.log10(20)) / (np.log10(20000) - np.log10(20))
-            
-            # Below mono_bass_freq → collapsed to mono (no width)
+            y = cy + ch - ch * (np.log10(freq) - log_min) / (log_max - log_min)
+
+            # Width at this frequency
             if self._mono_bass_freq > 0 and freq < self._mono_bass_freq:
-                db_offset = -width_factor * 3  # Reduce width below crossover
+                w_amount = 0.05  # Nearly mono below crossover
             else:
-                db_offset = width_factor * self._spectral_width[min(i, len(self._spectral_width)-1)] * 6
-            
-            y = zero_y - (db_offset / 6.0) * (curve_rect.height() * 0.5)
-            path.lineTo(x, y)
-        
-        # Close along 0dB
-        path.lineTo(curve_rect.x() + curve_rect.width(), zero_y)
-        
-        # Fill
-        fill_color = QColor(220, 80, 100, 60) if width_factor > 0 else QColor(0, 200, 220, 60)
-        p.setPen(Qt.PenStyle.NoPen)
-        p.setBrush(fill_color)
-        p.drawPath(path)
-        
-        # Outline
-        p.setPen(QPen(QColor(255, 255, 255, 180), 1.2))
-        p.setBrush(Qt.BrushStyle.NoBrush)
-        # Redraw just the curve part
-        curve_path = QPainterPath()
-        for i, freq in enumerate(self._spectral_freqs):
-            x = curve_rect.x() + curve_rect.width() * (np.log10(freq) - np.log10(20)) / (np.log10(20000) - np.log10(20))
-            if self._mono_bass_freq > 0 and freq < self._mono_bass_freq:
-                db_offset = -width_factor * 3
-            else:
-                db_offset = width_factor * self._spectral_width[min(i, len(self._spectral_width)-1)] * 6
-            y = zero_y - (db_offset / 6.0) * (curve_rect.height() * 0.5)
+                base_w = self._spectral_width[min(i, len(self._spectral_width) - 1)]
+                w_amount = max(0.05, base_w * (1.0 + width_factor))
+
+            spread = w_amount * cw / 2 * 0.8  # Max spread = 80% of half-width
+
             if i == 0:
-                curve_path.moveTo(x, y)
-            else:
-                curve_path.lineTo(x, y)
-        p.drawPath(curve_path)
-        
-        # Mono bass crossover line
-        if self._mono_bass_freq > 0:
-            xover_x = curve_rect.x() + curve_rect.width() * (np.log10(self._mono_bass_freq) - np.log10(20)) / (np.log10(20000) - np.log10(20))
+                left_path.moveTo(center_x, y)
+                right_path.moveTo(center_x, y)
+
+            left_path.lineTo(center_x - spread, y)
+            right_path.lineTo(center_x + spread, y)
+
+        # Close paths back to center
+        left_path.lineTo(center_x, cy + ch)
+        left_path.closeSubpath()
+        right_path.lineTo(center_x, cy + ch)
+        right_path.closeSubpath()
+
+        # Fill L wing (teal)
+        l_grad = QLinearGradient(center_x, 0, cx, 0)
+        l_grad.setColorAt(0.0, QColor(0, 200, 220, 20))
+        l_grad.setColorAt(0.5, QColor(0, 180, 216, 60))
+        l_grad.setColorAt(1.0, QColor(0, 160, 200, 100))
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QBrush(l_grad))
+        p.drawPath(left_path)
+
+        # Fill R wing (teal, mirrored)
+        r_grad = QLinearGradient(center_x, 0, cx + cw, 0)
+        r_grad.setColorAt(0.0, QColor(0, 200, 220, 20))
+        r_grad.setColorAt(0.5, QColor(0, 180, 216, 60))
+        r_grad.setColorAt(1.0, QColor(0, 160, 200, 100))
+        p.setBrush(QBrush(r_grad))
+        p.drawPath(right_path)
+
+        # Outline
+        p.setPen(QPen(QColor(0, 200, 220, 150), 1.0))
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.drawPath(left_path)
+        p.drawPath(right_path)
+
+        # Mono bass crossover line (horizontal)
+        if self._mono_bass_freq > 0 and self._mono_bass_freq < 20000:
+            xover_y = cy + ch - ch * (np.log10(max(20, self._mono_bass_freq)) - log_min) / (log_max - log_min)
             p.setPen(QPen(OzoneColors.AMBER, 1.5, Qt.PenStyle.DashLine))
-            p.drawLine(int(xover_x), int(curve_rect.y()), int(xover_x), int(curve_rect.y() + curve_rect.height()))
-        
+            p.drawLine(int(cx), int(xover_y), int(cx + cw), int(xover_y))
+            p.setPen(OzoneColors.AMBER)
+            p.setFont(QFont("SF Pro Display", 7))
+            p.drawText(int(cx + cw - 60), int(xover_y - 4), f"MONO < {self._mono_bass_freq}Hz")
+
+        # Width % display (large, center-top)
+        p.setPen(OzoneColors.TEXT_PRIMARY)
+        p.setFont(QFont("Menlo", 11, QFont.Weight.Bold))
+        w_text = f"W: {self._width_value}%"
+        p.drawText(int(center_x - 25), int(cy + ch + 16), w_text)
+
         # ─── Right: Correlation Meter ───
         corr_x = 440
         corr_w = 100
