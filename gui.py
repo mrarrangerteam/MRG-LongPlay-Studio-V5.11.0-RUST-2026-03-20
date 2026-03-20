@@ -8940,13 +8940,20 @@ class LongPlayStudioV4(QMainWindow):
         self._master_rerender_timer.start(150)
 
     def _feed_meter_panels(self):
-        """Feed audio meter data from chain/RT engine to open popup panels (20fps)."""
+        """Feed audio meter data from chain/RT engine/MasterPanel to popup panels (20fps).
+
+        Data sources (priority order):
+        1. RT engine (real-time playback) — peak, RMS, GR, correlation
+        2. MasterPanel meter buffer (offline render) — LUFS, GR, peaks per stage
+        3. Knob values (always available) — gain, width, soothe amount, compress
+        """
         if not hasattr(self, '_meter_panels') or not self._meter_panels:
             return
 
-        # Gather meter data from chain and knob values
+        # ─── Gather data from all sources ───
         chain = getattr(self, '_right_chain', None)
         rt = getattr(self, '_rt_engine', None)
+        mw = getattr(self, '_master_window', None)
 
         # Read current knob values
         gain_db = self.right_gain_dial.value() if hasattr(self, 'right_gain_dial') else 0.0
@@ -8955,7 +8962,7 @@ class LongPlayStudioV4(QMainWindow):
         compress_amt = self.right_compress_knob.value() if hasattr(self, 'right_compress_knob') else 0
         ceiling = self.right_ceiling_spin.value() if hasattr(self, 'right_ceiling_spin') else -1.0
 
-        # Try to get real-time meter data from RT engine
+        # Source 1: RT engine (real-time playback)
         rt_data = {}
         if rt and hasattr(rt, 'get_meter_data'):
             try:
@@ -8964,11 +8971,34 @@ class LongPlayStudioV4(QMainWindow):
             except Exception:
                 pass
 
-        peak_l = rt_data.get('peak_l', -60.0)
-        peak_r = rt_data.get('peak_r', -60.0)
-        gr_db = rt_data.get('gain_reduction_db', 0.0)
+        # Source 2: MasterPanel meter buffer (offline rendering / chain callback)
+        chain_data = {}
+        if mw and hasattr(mw, '_meter_buffer') and hasattr(mw, '_meter_lock'):
+            try:
+                import threading
+                with mw._meter_lock:
+                    if mw._meter_buffer:
+                        # Get latest "final" stage entry, or last entry
+                        for entry in reversed(mw._meter_buffer):
+                            if entry.get('stage') in ('final', 'post_maximizer', 'playback'):
+                                chain_data = entry
+                                break
+                        if not chain_data:
+                            chain_data = mw._meter_buffer[-1]
+            except Exception:
+                pass
 
-        # Feed Maximizer panel
+        # Merge: RT engine takes priority, chain_data fills gaps
+        peak_l = rt_data.get('peak_l', chain_data.get('left_peak_db', -60.0))
+        peak_r = rt_data.get('peak_r', chain_data.get('right_peak_db', -60.0))
+        gr_db = rt_data.get('gain_reduction_db', chain_data.get('gain_reduction_db', 0.0))
+        lufs = rt_data.get('lufs', chain_data.get('lufs_integrated',
+               chain_data.get('lufs', -14.0)))
+        corr = rt_data.get('correlation', chain_data.get('correlation', 1.0))
+
+        # ─── Feed each panel ───
+
+        # Maximizer panel
         p = self._meter_panels.get("maximizer")
         if p and p.isVisible():
             irc_text = "IRC 2"
@@ -8978,45 +9008,47 @@ class LongPlayStudioV4(QMainWindow):
             p.update_meter(
                 gain_reduction_db=gr_db,
                 output_peak_l=peak_l, output_peak_r=peak_r,
-                lufs=rt_data.get('lufs', -14.0),
-                ceiling=ceiling, irc_mode=irc_text,
+                lufs=lufs, ceiling=ceiling, irc_mode=irc_text,
                 gain_db=gain_db,
                 true_peak=max(peak_l, peak_r),
             )
 
-        # Feed Imager panel
+        # Imager panel
         p = self._meter_panels.get("imager")
         if p and p.isVisible():
-            vl = rt_data.get('rms_l', 0.0)
-            vr = rt_data.get('rms_r', 0.0)
-            # Estimate correlation from peak data
-            corr = rt_data.get('correlation', 1.0)
+            vl = rt_data.get('rms_l', chain_data.get('left_rms_db', 0.0))
+            vr = rt_data.get('rms_r', chain_data.get('right_rms_db', 0.0))
             p.update_meter(
                 width=int(width_val),
                 correlation=corr,
                 vector_l=vl, vector_r=vr,
             )
 
-        # Feed Soothe panel
+        # Soothe panel
         p = self._meter_panels.get("soothe")
         if p and p.isVisible():
             reduction = None
-            if chain and hasattr(chain, 'soothe') and hasattr(chain.soothe, 'get_reduction_spectrum'):
-                try:
-                    reduction = chain.soothe.get_reduction_spectrum()
-                except Exception:
-                    pass
+            # Try MasterPanel chain first, then right_chain
+            for src in [mw, self]:
+                ch = getattr(src, 'chain', None) or getattr(src, '_right_chain', None)
+                if ch and hasattr(ch, 'soothe') and hasattr(ch.soothe, 'get_reduction_spectrum'):
+                    try:
+                        reduction = ch.soothe.get_reduction_spectrum()
+                        if reduction is not None:
+                            break
+                    except Exception:
+                        pass
             p.update_meter(
                 amount=soothe_amt,
                 reduction_db=reduction,
             )
 
-        # Feed Compressor panel
+        # Compressor panel
         p = self._meter_panels.get("compressor")
         if p and p.isVisible():
-            comp_gr = rt_data.get('compress_gr', 0.0)
+            comp_gr = rt_data.get('compress_gr', chain_data.get('gain_reduction_db', 0.0))
             p.update_meter(
-                gain_reduction_db=comp_gr,
+                gain_reduction_db=comp_gr if compress_amt > 0 else 0.0,
                 band_gr_low=rt_data.get('band_gr_low', 0.0),
                 band_gr_mid=rt_data.get('band_gr_mid', 0.0),
                 band_gr_high=rt_data.get('band_gr_high', 0.0),

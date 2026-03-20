@@ -161,33 +161,42 @@ class BaseMeterPanel(QWidget):
             # Hit-test close button (X icon at top-right)
             click_x = event.position().x()
             click_y = event.position().y()
-            cx, cy = self.width() - 18, 14
-            if abs(click_x - cx) < 10 and abs(click_y - cy) < 10:
+            cx, cy = self.width() - 22, 16
+            if abs(click_x - cx) < 12 and abs(click_y - cy) < 12:
                 self.close()
                 return
         self._drag_pos = None
         super().mouseReleaseEvent(event)
 
     def _draw_title_bar(self, painter: QPainter):
-        """Draw Ozone-style title bar"""
+        """Draw Ozone 12-style title bar with glow close button"""
+        # Title bar background gradient
+        grad = QLinearGradient(0, 0, 0, 32)
+        grad.setColorAt(0, QColor(24, 28, 36))
+        grad.setColorAt(1, QColor(16, 20, 26))
         painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QColor(18, 22, 28))
-        painter.drawRect(0, 0, self.width(), 28)
-        
-        # Title text
-        painter.setPen(OzoneColors.TEXT_SECONDARY)
-        painter.setFont(QFont("SF Pro Display", 10, QFont.Weight.Medium))
-        painter.drawText(12, 18, self._title)
-        
-        # Close button
-        painter.setPen(QPen(OzoneColors.TEXT_TERTIARY, 1.5))
-        cx, cy = self.width() - 18, 14
-        painter.drawLine(int(cx-4), int(cy-4), int(cx+4), int(cy+4))
-        painter.drawLine(int(cx+4), int(cy-4), int(cx-4), int(cy+4))
-        
-        # Bottom border
-        painter.setPen(QPen(OzoneColors.BORDER, 0.5))
-        painter.drawLine(0, 28, self.width(), 28)
+        painter.setBrush(QBrush(grad))
+        painter.drawRect(0, 0, self.width(), 32)
+
+        # Title text with subtle glow
+        painter.setPen(QColor(120, 200, 220, 200))
+        painter.setFont(QFont("SF Pro Display", 11, QFont.Weight.DemiBold))
+        painter.drawText(14, 21, self._title)
+
+        # Close button (circle + X) — Ozone 12 style
+        cx, cy = self.width() - 22, 16
+        # Circle background
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(60, 20, 20, 180))
+        painter.drawEllipse(int(cx - 10), int(cy - 10), 20, 20)
+        # X lines
+        painter.setPen(QPen(QColor(230, 80, 80), 1.8))
+        painter.drawLine(int(cx - 4), int(cy - 4), int(cx + 4), int(cy + 4))
+        painter.drawLine(int(cx + 4), int(cy - 4), int(cx - 4), int(cy + 4))
+
+        # Bottom border (cyan accent line)
+        painter.setPen(QPen(QColor(0, 180, 220, 60), 1.0))
+        painter.drawLine(0, 32, self.width(), 32)
     
     def _draw_grid(self, painter: QPainter, rect: QRectF, 
                    h_lines: int = 5, v_lines: int = 0,
@@ -287,100 +296,137 @@ class MaximizerMeterPanel(BaseMeterPanel):
     def paintEvent(self, event):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        
-        # Background
-        p.fillRect(self.rect(), OzoneColors.BG_DEEP)
+
+        # Background with subtle gradient
+        bg_grad = QLinearGradient(0, 0, 0, self.height())
+        bg_grad.setColorAt(0, QColor(12, 14, 18))
+        bg_grad.setColorAt(1, QColor(8, 10, 14))
+        p.fillRect(self.rect(), QBrush(bg_grad))
+
+        # Outer border glow
+        p.setPen(QPen(QColor(0, 180, 220, 40), 1.0))
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.drawRoundedRect(1, 1, self.width() - 2, self.height() - 2, 6, 6)
+
         self._draw_title_bar(p)
-        
+
         # ─── Left: Controls ───
-        left_x = 12
-        top_y = 38
-        
-        # IRC Mode label
-        p.setPen(OzoneColors.TEXT_SECONDARY)
-        p.setFont(QFont("SF Pro Display", 9))
-        p.drawText(left_x, top_y + 12, f"{self._irc_mode}")
-        
-        # Gain knob value
+        left_x = 14
+        top_y = 42
+
+        # IRC Mode badge
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QColor(0, 180, 220, 30))
+        p.drawRoundedRect(left_x, top_y, 70, 18, 4, 4)
         p.setPen(OzoneColors.CYAN)
-        p.setFont(QFont("SF Pro Display", 22, QFont.Weight.Bold))
-        p.drawText(left_x, top_y + 52, f"{self._gain_db:+.1f}")
-        p.setPen(OzoneColors.TEXT_SECONDARY)
+        p.setFont(QFont("SF Pro Display", 9, QFont.Weight.Bold))
+        p.drawText(left_x + 8, top_y + 13, f"{self._irc_mode}")
+
+        # Gain knob value — large
+        p.setPen(OzoneColors.CYAN_BRIGHT)
+        p.setFont(QFont("Menlo", 26, QFont.Weight.Bold))
+        p.drawText(left_x, top_y + 58, f"{self._gain_db:+.1f}")
+        p.setPen(OzoneColors.TEXT_TERTIARY)
         p.setFont(QFont("SF Pro Display", 9))
-        p.drawText(left_x, top_y + 68, "dB Gain")
-        
-        # Output Level / True Peak
+        p.drawText(left_x, top_y + 72, "dB Gain")
+
+        # Output Level
         p.setPen(OzoneColors.TEXT_SECONDARY)
         p.setFont(QFont("SF Pro Display", 9))
         p.drawText(left_x, top_y + 100, "Output Level")
         p.setPen(OzoneColors.CYAN)
-        p.setFont(QFont("SF Pro Display", 12, QFont.Weight.Bold))
-        p.drawText(left_x, top_y + 116, f"{self._ceiling_db:.2f}")
-        
+        p.setFont(QFont("Menlo", 13, QFont.Weight.Bold))
+        p.drawText(left_x, top_y + 118, f"{self._ceiling_db:.2f} dBTP")
+
+        # True Peak
+        tp_color = OzoneColors.GREEN if self._true_peak_db < self._ceiling_db else OzoneColors.RED
         p.setPen(OzoneColors.TEXT_SECONDARY)
         p.setFont(QFont("SF Pro Display", 9))
-        p.drawText(left_x + 70, top_y + 100, "True Peak")
-        
+        p.drawText(left_x, top_y + 142, "True Peak")
+        p.setPen(tp_color)
+        p.setFont(QFont("Menlo", 13, QFont.Weight.Bold))
+        p.drawText(left_x, top_y + 160, f"{self._true_peak_db:.1f} dBTP")
+
         # LUFS
         p.setPen(OzoneColors.TEXT_SECONDARY)
         p.setFont(QFont("SF Pro Display", 9))
-        p.drawText(left_x, top_y + 150, "LUFS")
+        p.drawText(left_x, top_y + 184, "LUFS int")
         p.setPen(OzoneColors.AMBER)
-        p.setFont(QFont("SF Pro Display", 14, QFont.Weight.Bold))
-        p.drawText(left_x + 40, top_y + 152, f"{self._lufs:.1f}")
+        p.setFont(QFont("Menlo", 16, QFont.Weight.Bold))
+        p.drawText(left_x + 54, top_y + 186, f"{self._lufs:.1f}")
         
-        # ─── Center: Gain Reduction History (cyan waveform) ───
-        gr_rect = QRectF(140, 36, 340, 190)
-        
-        # Background
+        # ─── Center: Gain Reduction History (Ozone 12 cyan waveform + glow) ───
+        gr_rect = QRectF(140, 40, 340, 190)
+
+        # Background with inner shadow
         p.setPen(Qt.PenStyle.NoPen)
-        p.setBrush(OzoneColors.BG_PANEL)
-        p.drawRoundedRect(gr_rect, 4, 4)
-        
+        inner_grad = QLinearGradient(0, gr_rect.y(), 0, gr_rect.y() + gr_rect.height())
+        inner_grad.setColorAt(0, QColor(10, 14, 20))
+        inner_grad.setColorAt(1, QColor(14, 18, 24))
+        p.setBrush(QBrush(inner_grad))
+        p.drawRoundedRect(gr_rect, 6, 6)
+
         # Grid
         self._draw_gr_grid(p, gr_rect)
-        
-        # Draw GR history as filled waveform
+
+        # Draw GR history as filled waveform with glow
         if len(self._gr_history) > 1:
-            path = QPainterPath()
             data = list(self._gr_history)
             n = len(data)
-            
-            # Map GR to y position (0dB at top, -12dB at bottom)
+
             def gr_to_y(gr):
                 normalized = max(0, min(1, -gr / 12.0))
                 return gr_rect.y() + normalized * gr_rect.height()
-            
-            # Start from bottom-left
+
             first_x = gr_rect.x() + gr_rect.width() - n * (gr_rect.width() / 400)
+
+            # Build fill path (closed)
+            path = QPainterPath()
             path.moveTo(first_x, gr_rect.y())
-            
             for i, gr in enumerate(data):
                 x = first_x + i * (gr_rect.width() / 400)
-                y = gr_to_y(gr)
-                path.lineTo(x, y)
-            
-            # Close path along bottom
+                path.lineTo(x, gr_to_y(gr))
             path.lineTo(gr_rect.x() + gr_rect.width(), gr_rect.y())
-            
-            # Fill with gradient
+
+            # Fill with rich gradient
             grad = QLinearGradient(0, gr_rect.y(), 0, gr_rect.y() + gr_rect.height())
-            grad.setColorAt(0.0, QColor(0, 200, 220, 20))
-            grad.setColorAt(0.3, QColor(0, 200, 220, 80))
-            grad.setColorAt(1.0, QColor(0, 200, 220, 160))
+            grad.setColorAt(0.0, QColor(0, 200, 220, 8))
+            grad.setColorAt(0.3, QColor(0, 180, 220, 50))
+            grad.setColorAt(0.7, QColor(0, 160, 200, 100))
+            grad.setColorAt(1.0, QColor(0, 140, 180, 160))
             p.setPen(Qt.PenStyle.NoPen)
             p.setBrush(QBrush(grad))
             p.drawPath(path)
-            
-            # Outline
+
+            # Build outline path
             outline = QPainterPath()
             outline.moveTo(first_x, gr_to_y(data[0]))
             for i, gr in enumerate(data):
                 x = first_x + i * (gr_rect.width() / 400)
                 outline.lineTo(x, gr_to_y(gr))
-            p.setPen(QPen(OzoneColors.CYAN, 1.0))
+
+            # Glow pass (thick + transparent)
+            p.setPen(QPen(QColor(0, 200, 220, 50), 4.0))
             p.setBrush(Qt.BrushStyle.NoBrush)
             p.drawPath(outline)
+
+            # Sharp outline
+            p.setPen(QPen(OzoneColors.CYAN_BRIGHT, 1.2))
+            p.drawPath(outline)
+
+            # Current GR value badge
+            if data:
+                current_gr = data[-1]
+                gr_color = OzoneColors.CYAN if current_gr > -6 else (
+                    OzoneColors.AMBER if current_gr > -10 else OzoneColors.RED)
+                badge_x = gr_rect.x() + gr_rect.width() - 55
+                badge_y = gr_rect.y() + 6
+                p.setPen(Qt.PenStyle.NoPen)
+                p.setBrush(QColor(0, 0, 0, 140))
+                p.drawRoundedRect(int(badge_x), int(badge_y), 50, 22, 4, 4)
+                p.setPen(gr_color)
+                p.setFont(QFont("Menlo", 12, QFont.Weight.Bold))
+                p.drawText(int(badge_x + 4), int(badge_y + 16), f"{current_gr:.1f}")
         
         # ─── Right: Output Level Meters (L/R bars) ───
         meter_x = 500
@@ -458,7 +504,7 @@ class ImagerMeterPanel(BaseMeterPanel):
     """
     
     def __init__(self, parent=None):
-        super().__init__("Stereo Imager", width=560, height=300, parent=parent)
+        super().__init__("Stereo Imager", width=600, height=320, parent=parent)
         
         self._width_value = 100  # 0-200
         self._mono_bass_freq = 0
@@ -489,11 +535,18 @@ class ImagerMeterPanel(BaseMeterPanel):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         
-        p.fillRect(self.rect(), OzoneColors.BG_DEEP)
+        # Background
+        bg_grad = QLinearGradient(0, 0, 0, self.height())
+        bg_grad.setColorAt(0, QColor(12, 14, 18))
+        bg_grad.setColorAt(1, QColor(8, 10, 14))
+        p.fillRect(self.rect(), QBrush(bg_grad))
+        p.setPen(QPen(QColor(0, 180, 220, 40), 1.0))
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.drawRoundedRect(1, 1, self.width() - 2, self.height() - 2, 6, 6)
         self._draw_title_bar(p)
-        
+
         # ─── Stereo Width Curve ───
-        curve_rect = QRectF(50, 40, 360, 200)
+        curve_rect = QRectF(50, 44, 380, 220)
         p.setPen(Qt.PenStyle.NoPen)
         p.setBrush(OzoneColors.BG_PANEL)
         p.drawRoundedRect(curve_rect, 4, 4)
@@ -655,18 +708,25 @@ class CompressorMeterPanel(BaseMeterPanel):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         
-        p.fillRect(self.rect(), OzoneColors.BG_DEEP)
+        # Background
+        bg_grad = QLinearGradient(0, 0, 0, self.height())
+        bg_grad.setColorAt(0, QColor(12, 14, 18))
+        bg_grad.setColorAt(1, QColor(8, 10, 14))
+        p.fillRect(self.rect(), QBrush(bg_grad))
+        p.setPen(QPen(QColor(0, 180, 220, 40), 1.0))
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.drawRoundedRect(1, 1, self.width() - 2, self.height() - 2, 6, 6)
         self._draw_title_bar(p)
-        
+
         # ─── Left: Controls readout ───
-        left_x = 12
-        top_y = 40
-        
+        left_x = 14
+        top_y = 44
+
         p.setPen(OzoneColors.TEXT_SECONDARY)
         p.setFont(QFont("SF Pro Display", 9))
         p.drawText(left_x, top_y + 15, "Threshold")
         p.setPen(OzoneColors.CYAN)
-        p.setFont(QFont("SF Pro Display", 14, QFont.Weight.Bold))
+        p.setFont(QFont("Menlo", 14, QFont.Weight.Bold))
         p.drawText(left_x, top_y + 35, f"{self._threshold_db:.0f} dB")
         
         p.setPen(OzoneColors.TEXT_SECONDARY)
@@ -769,7 +829,7 @@ class SootheMeterPanel(BaseMeterPanel):
     """
     
     def __init__(self, parent=None):
-        super().__init__("Soothe — Resonance Suppression", width=560, height=300, parent=parent)
+        super().__init__("Soothe — Resonance Suppression", width=600, height=320, parent=parent)
         
         self._amount = 0.0
         self._speed = 50.0
@@ -800,27 +860,51 @@ class SootheMeterPanel(BaseMeterPanel):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         
-        p.fillRect(self.rect(), OzoneColors.BG_DEEP)
+        # Background
+        bg_grad = QLinearGradient(0, 0, 0, self.height())
+        bg_grad.setColorAt(0, QColor(12, 14, 18))
+        bg_grad.setColorAt(1, QColor(8, 10, 14))
+        p.fillRect(self.rect(), QBrush(bg_grad))
+
+        # Border glow
+        p.setPen(QPen(QColor(0, 180, 220, 40), 1.0))
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.drawRoundedRect(1, 1, self.width() - 2, self.height() - 2, 6, 6)
+
         self._draw_title_bar(p)
-        
-        # ─── Left: Controls ───
-        left_x = 12
-        top_y = 40
-        
-        # Amount knob readout
+
+        # ─── Left: Controls (Ozone 12 Clarity style) ───
+        left_x = 14
+        top_y = 44
+
+        # Amount — large ring-knob style readout
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QColor(30, 36, 46))
+        p.drawEllipse(left_x + 10, top_y, 70, 70)
+        # Amount arc
+        arc_pct = self._amount / 100.0
+        p.setPen(QPen(OzoneColors.CYAN, 4))
+        span = int(arc_pct * 270 * 16)
+        p.drawArc(left_x + 14, top_y + 4, 62, 62, 225 * 16, -span)
+        # Amount number
+        p.setPen(OzoneColors.TEXT_PRIMARY)
+        p.setFont(QFont("Menlo", 18, QFont.Weight.Bold))
+        txt = f"{self._amount:.0f}"
+        p.drawText(left_x + 28, top_y + 44, txt)
+        p.setPen(OzoneColors.TEXT_TERTIARY)
+        p.setFont(QFont("SF Pro Display", 9))
+        p.drawText(left_x + 24, top_y + 84, "Amount")
+
+        # Tilt / Speed / Smooth readouts
         p.setPen(OzoneColors.TEXT_SECONDARY)
         p.setFont(QFont("SF Pro Display", 9))
-        p.drawText(left_x, top_y + 12, "Amount")
-        p.setPen(OzoneColors.CYAN)
-        p.setFont(QFont("SF Pro Display", 20, QFont.Weight.Bold))
-        p.drawText(left_x, top_y + 42, f"{self._amount:.0f}")
-        
-        p.setPen(OzoneColors.TEXT_SECONDARY)
-        p.setFont(QFont("SF Pro Display", 9))
-        p.drawText(left_x, top_y + 70, f"Speed: {self._speed:.0f}")
-        p.drawText(left_x, top_y + 88, f"Smooth: {self._smoothing:.0f}")
-        
-        # Freq range
+        p.drawText(left_x, top_y + 108, f"Speed: {self._speed:.0f}")
+        p.drawText(left_x, top_y + 126, f"Smooth: {self._smoothing:.0f}")
+
+        # Freq range badge
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QColor(0, 180, 220, 25))
+        p.drawRoundedRect(left_x, int(top_y + 140), 96, 20, 4, 4)
         p.setPen(OzoneColors.AMBER)
         p.setFont(QFont("SF Pro Display", 9))
         p.drawText(left_x, top_y + 120, f"{self._freq_low:.0f} - {self._freq_high:.0f} Hz")
@@ -834,11 +918,14 @@ class SootheMeterPanel(BaseMeterPanel):
             p.setFont(QFont("SF Pro Display", 9, QFont.Weight.Bold))
             p.drawText(left_x + 6, int(top_y + 155), "Delta")
         
-        # ─── Center: Spectral Reduction Curve ───
-        curve_rect = QRectF(120, 40, 420, 210)
+        # ─── Center: Spectral Reduction Curve (Ozone 12 Clarity style) ───
+        curve_rect = QRectF(120, 44, 460, 230)
+        inner_grad = QLinearGradient(0, curve_rect.y(), 0, curve_rect.y() + curve_rect.height())
+        inner_grad.setColorAt(0, QColor(10, 14, 20))
+        inner_grad.setColorAt(1, QColor(14, 18, 24))
         p.setPen(Qt.PenStyle.NoPen)
-        p.setBrush(OzoneColors.BG_PANEL)
-        p.drawRoundedRect(curve_rect, 4, 4)
+        p.setBrush(QBrush(inner_grad))
+        p.drawRoundedRect(curve_rect, 6, 6)
         
         # Freq grid
         freq_labels = [50, 100, 200, 500, "1k", "2k", "5k", "10k", "20k"]
@@ -887,15 +974,17 @@ class SootheMeterPanel(BaseMeterPanel):
             # Close along top
             path.lineTo(curve_rect.x() + curve_rect.width(), zero_y)
             
-            # Fill with warm color (what's being removed)
+            # Fill with Ozone 12 Clarity-style coral/red gradient
             grad = QLinearGradient(0, curve_rect.y(), 0, curve_rect.y() + curve_rect.height())
-            grad.setColorAt(0, QColor(220, 80, 100, 10))
-            grad.setColorAt(1, QColor(220, 80, 100, 100))
+            grad.setColorAt(0.0, QColor(200, 60, 80, 5))
+            grad.setColorAt(0.3, QColor(200, 60, 80, 40))
+            grad.setColorAt(0.7, QColor(180, 50, 70, 80))
+            grad.setColorAt(1.0, QColor(160, 40, 60, 130))
             p.setPen(Qt.PenStyle.NoPen)
             p.setBrush(QBrush(grad))
             p.drawPath(path)
-            
-            # White outline curve
+
+            # Outline with glow
             outline = QPainterPath()
             for i, freq in enumerate(self._freqs):
                 x = curve_rect.x() + curve_rect.width() * (np.log10(freq) - np.log10(20)) / (np.log10(20000) - np.log10(20))
@@ -905,9 +994,14 @@ class SootheMeterPanel(BaseMeterPanel):
                     outline.moveTo(x, y)
                 else:
                     outline.lineTo(x, y)
-            
-            p.setPen(QPen(QColor(255, 255, 255, 200), 1.2))
+
+            # Glow pass
+            p.setPen(QPen(QColor(220, 80, 100, 40), 3.5))
             p.setBrush(Qt.BrushStyle.NoBrush)
+            p.drawPath(outline)
+
+            # Sharp white outline
+            p.setPen(QPen(QColor(255, 240, 240, 220), 1.2))
             p.drawPath(outline)
         
         p.end()
