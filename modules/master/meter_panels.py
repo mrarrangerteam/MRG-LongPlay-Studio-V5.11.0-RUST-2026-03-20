@@ -114,12 +114,12 @@ class BaseMeterPanel(QWidget):
         super().__init__(parent)
         self.setWindowFlags(
             Qt.WindowType.Window
-            | Qt.WindowType.FramelessWindowHint
             | Qt.WindowType.WindowStaysOnTopHint
-            | Qt.WindowType.WindowDoesNotAcceptFocus
+            | Qt.WindowType.WindowCloseButtonHint
         )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, False)
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
+        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.setFixedSize(width, height)
         self.setStyleSheet(f"""
             QWidget {{

@@ -1169,6 +1169,19 @@ class MasterChain:
                 else:
                     levels["gain_reduction_db"] = 0.0
 
+                # V5.10.5: Stereo correlation & width for Imager popup panel
+                if chunk.ndim > 1 and chunk.shape[1] >= 2:
+                    L = chunk[:, 0]
+                    R = chunk[:, 1]
+                    denom = np.sqrt(np.sum(L ** 2) * np.sum(R ** 2))
+                    levels["correlation"] = float(np.sum(L * R) / (denom + 1e-10))
+                    mid_e = np.sum((L + R) ** 2)
+                    side_e = np.sum((L - R) ** 2)
+                    levels["stereo_width"] = float(side_e / (mid_e + 1e-10))
+                else:
+                    levels["correlation"] = 1.0
+                    levels["stereo_width"] = 0.0
+
                 # V5.5: LUFS measurement with correct key names
                 # V5.10 FIX: Integrated uses FULL audio, LRA computed properly
                 if HAS_PYLOUDNORM:
@@ -1239,10 +1252,37 @@ class MasterChain:
                         levels["lufs"] = -70.0
                         levels["lu_range"] = 0.0
 
-                # V5.10.5: Store per-stage data for popup panels
-                self.stage_meter_data[stage] = levels
+                # V5.10.5: Per-band gain reduction for compressor popup panel
+                if stage == "post_dynamics" and chunk.ndim > 1:
+                    try:
+                        mono = np.mean(chunk, axis=1)
+                        n_fft = min(len(mono), 4096)
+                        spectrum = np.abs(np.fft.rfft(mono[:n_fft])) ** 2
+                        freqs = np.fft.rfftfreq(n_fft, 1.0 / sr)
+                        xlo = getattr(self.dynamics, 'crossover_low', 200)
+                        xhi = getattr(self.dynamics, 'crossover_high', 4000)
+                        low_m = freqs < xlo
+                        mid_m = (freqs >= xlo) & (freqs < xhi)
+                        hi_m = freqs >= xhi
+                        eps = 1e-20
+                        thr = getattr(self.dynamics.single_band, 'threshold', -16.0)
+                        for mask, key in [(low_m, 'band_gr_low'), (mid_m, 'band_gr_mid'), (hi_m, 'band_gr_high')]:
+                            band_db = 10 * np.log10(np.mean(spectrum[mask]) + eps)
+                            levels[key] = min(0.0, thr - band_db) if band_db > thr else 0.0
+                        # Store to dynamics for external access
+                        self.dynamics.last_band_gr = {
+                            "low": levels['band_gr_low'],
+                            "mid": levels['band_gr_mid'],
+                            "high": levels['band_gr_high'],
+                        }
+                    except Exception:
+                        levels['band_gr_low'] = 0.0
+                        levels['band_gr_mid'] = 0.0
+                        levels['band_gr_high'] = 0.0
 
+                # V5.10.5: Store per-stage data for popup panels
                 with self._meter_lock:
+                    self.stage_meter_data[stage] = levels
                     self._meter_callback(levels)
             except Exception as e:
                 print(f"[METER] ❌ _send_meter ERROR: {e}")
@@ -1595,7 +1635,7 @@ class MasterChain:
     def save_settings(self, filepath: str):
         """Save all module settings to JSON file."""
         data = {
-            "version": "5.9",
+            "version": "5.10",
             "chain": {
                 "intensity": self.intensity,
                 "target_lufs": self.target_lufs,

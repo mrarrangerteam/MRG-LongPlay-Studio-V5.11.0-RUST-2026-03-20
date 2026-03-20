@@ -67,7 +67,7 @@ def project_to_dict(project: Project) -> Dict:
         })
 
     return {
-        "version": "5.9",
+        "version": "5.10",
         "tracks": tracks,
         "duration": project.duration,
         "fps": project.fps,

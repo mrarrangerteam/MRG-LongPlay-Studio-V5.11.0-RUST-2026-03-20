@@ -1412,6 +1412,9 @@ class LongPlayStudioV4(QMainWindow):
         self.right_irc_submode_widget.setVisible(False)  # Hidden by default (IRC 2 has no sub-modes)
         layout.addWidget(self.right_irc_submode_widget)
 
+        # V5.10.5: Connect sub-mode change → re-sync chain with new sub-mode
+        self.right_irc_submode.currentTextChanged.connect(self._on_right_irc_submode_changed)
+
         # ── Gain Knob + Display (OzoneRotaryKnob — custom QPainter) ──
         # NOTE: QDial + CSS border-radius breaks mouse events on macOS/PyQt6.
         from modules.widgets.rotary_knob import OzoneRotaryKnob
@@ -2033,6 +2036,36 @@ class LongPlayStudioV4(QMainWindow):
         # Re-render with new IRC mode if gain > 0 or preset active
         self._trigger_master_rerender()
 
+    def _on_right_irc_submode_changed(self, sub_mode: str):
+        """V5.10.5: IRC sub-mode changed — sync to chain + re-render."""
+        if not sub_mode:
+            return
+        mode_name = self.right_irc_combo.currentText() if hasattr(self, 'right_irc_combo') else "IRC 2"
+
+        # RT engine
+        if self._rt_engine and self._rt_active:
+            try:
+                self._rt_engine.set_irc_mode(mode_name)
+            except Exception:
+                pass
+
+        chain = self._get_right_panel_chain()
+        if chain and hasattr(chain, 'maximizer'):
+            try:
+                chain.maximizer.set_irc_mode(mode_name, sub_mode)
+            except Exception:
+                pass
+
+        if hasattr(self, '_master_window') and self._master_window is not None:
+            mw = self._master_window
+            if hasattr(mw, 'chain') and hasattr(mw.chain, 'maximizer'):
+                try:
+                    mw.chain.maximizer.set_irc_mode(mode_name, sub_mode)
+                except Exception:
+                    pass
+
+        self._trigger_master_rerender()
+
     def _on_right_mastering_preset_changed(self, preset_name: str):
         """V5.7: Mastering preset changed — apply REAL processing through MasterChain."""
         if not _HAS_PRESETS or preset_name == "— None —":
@@ -2155,7 +2188,8 @@ class LongPlayStudioV4(QMainWindow):
                         if "ceiling" in mx:
                             chain.maximizer.set_ceiling(mx["ceiling"])
                         if "irc_mode" in mx:
-                            chain.maximizer.set_irc_mode(mx["irc_mode"])
+                            sub_mode = mx.get("irc_sub_mode", None)
+                            chain.maximizer.set_irc_mode(mx["irc_mode"], sub_mode)
 
     def _apply_gain_preview(self):
         """V5.7: Process current track through REAL MasterChain (Dynamics + Imager + Maximizer).

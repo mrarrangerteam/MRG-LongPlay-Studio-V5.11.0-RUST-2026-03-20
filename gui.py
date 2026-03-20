@@ -7711,6 +7711,9 @@ class LongPlayStudioV4(QMainWindow):
         self.right_irc_submode_widget.setVisible(False)  # Hidden by default (IRC 2 has no sub-modes)
         layout.addWidget(self.right_irc_submode_widget)
 
+        # V5.10.5: Connect sub-mode change → re-sync chain with new sub-mode
+        self.right_irc_submode.currentTextChanged.connect(self._on_right_irc_submode_changed)
+
         # ── WIDTH → SOOTHE → COMPRESS → GAIN — single row of 4 OzoneRotaryKnobs ──
         # NOTE: QDial + CSS border-radius breaks mouse hit area on macOS/PyQt6.
         # OzoneRotaryKnob has explicit mousePressEvent/mouseMoveEvent — always works.
@@ -8736,6 +8739,36 @@ class LongPlayStudioV4(QMainWindow):
         # Trigger real-time re-render
         self._trigger_master_rerender()
 
+    def _on_right_irc_submode_changed(self, sub_mode: str):
+        """V5.10.5: IRC sub-mode changed — sync to chain + re-render."""
+        if not sub_mode:
+            return
+        mode_name = self.right_irc_combo.currentText() if hasattr(self, 'right_irc_combo') else "IRC 2"
+
+        # RT engine
+        if self._rt_engine and self._rt_active:
+            try:
+                self._rt_engine.set_irc_mode(mode_name)
+            except Exception:
+                pass
+
+        chain = self._get_right_panel_chain()
+        if chain and hasattr(chain, 'maximizer'):
+            try:
+                chain.maximizer.set_irc_mode(mode_name, sub_mode)
+            except Exception:
+                pass
+
+        if hasattr(self, '_master_window') and self._master_window is not None:
+            mw = self._master_window
+            if hasattr(mw, 'chain') and hasattr(mw.chain, 'maximizer'):
+                try:
+                    mw.chain.maximizer.set_irc_mode(mode_name, sub_mode)
+                except Exception:
+                    pass
+
+        self._trigger_master_rerender()
+
     def _on_right_mastering_preset_changed(self, preset_name: str):
         """V5.7: Mastering preset changed — apply REAL processing through MasterChain."""
         if not _HAS_PRESETS or preset_name == "— None —":
@@ -8997,8 +9030,8 @@ class LongPlayStudioV4(QMainWindow):
         p = self._meter_panels.get("maximizer")
         if p and p.isVisible():
             irc_text = "IRC 2"
-            if hasattr(self, 'right_irc_mode'):
-                idx = self.right_irc_mode.currentIndex() if hasattr(self.right_irc_mode, 'currentIndex') else 0
+            if hasattr(self, 'right_irc_combo'):
+                idx = self.right_irc_combo.currentIndex() if hasattr(self.right_irc_combo, 'currentIndex') else 0
                 irc_text = f"IRC {idx + 1}"
             mp_l = max_data.get('left_peak_db', peak_l)
             mp_r = max_data.get('right_peak_db', peak_r)
@@ -9017,8 +9050,17 @@ class LongPlayStudioV4(QMainWindow):
             vl = img_data.get('left_rms_db', levels.get('left_rms_db', 0.0))
             vr = img_data.get('right_rms_db', levels.get('right_rms_db', 0.0))
             corr = img_data.get('correlation', levels.get('correlation', 1.0))
+            # V5.10.5: Read mono bass freq from chain imager
+            mono_bass = 0
+            mw = getattr(self, '_master_window', None)
+            for src in [mw, self]:
+                ch = getattr(src, 'chain', None) or getattr(src, '_right_chain', None)
+                if ch and hasattr(ch, 'imager') and hasattr(ch.imager, 'mono_bass_freq'):
+                    mono_bass = getattr(ch.imager, 'mono_bass_freq', 0)
+                    break
             p.update_meter(
                 width=int(width_val),
+                mono_bass_freq=mono_bass,
                 correlation=corr,
                 vector_l=vl, vector_r=vr,
             )
@@ -9037,20 +9079,54 @@ class LongPlayStudioV4(QMainWindow):
                             break
                     except Exception:
                         pass
+            # V5.10.5: Read soothe params from chain
+            s_freq_low, s_freq_high, s_speed, s_smoothing, s_delta = 2000.0, 8000.0, 50.0, 50.0, False
+            for src in [mw, self]:
+                ch = getattr(src, 'chain', None) or getattr(src, '_right_chain', None)
+                if ch and hasattr(ch, 'soothe'):
+                    s = ch.soothe
+                    s_freq_low = getattr(s, 'freq_low', 2000.0)
+                    s_freq_high = getattr(s, 'freq_high', 8000.0)
+                    s_speed = getattr(s, 'speed', 50.0)
+                    s_smoothing = getattr(s, 'smoothing', 50.0)
+                    s_delta = getattr(s, 'delta', False)
+                    break
             p.update_meter(
                 amount=soothe_amt,
                 reduction_db=reduction,
+                freq_low=s_freq_low,
+                freq_high=s_freq_high,
+                speed=s_speed,
+                smoothing=s_smoothing,
+                delta=s_delta,
             )
 
         # Compressor panel
         p = self._meter_panels.get("compressor")
         if p and p.isVisible():
             comp_gr = dyn_data.get('gain_reduction_db', gr_db) if compress_amt > 0 else 0.0
+            # V5.10.5: Read compressor params from chain dynamics
+            d_threshold, d_ratio, d_attack, d_release = -18.0, 2.5, 10.0, 100.0
+            mw2 = getattr(self, '_master_window', None)
+            for src in [mw2, self]:
+                ch = getattr(src, 'chain', None) or getattr(src, '_right_chain', None)
+                if ch and hasattr(ch, 'dynamics'):
+                    sb = getattr(ch.dynamics, 'single_band', None)
+                    if sb:
+                        d_threshold = getattr(sb, 'threshold', -18.0)
+                        d_ratio = getattr(sb, 'ratio', 2.5)
+                        d_attack = getattr(sb, 'attack', 10.0)
+                        d_release = getattr(sb, 'release', 100.0)
+                    break
             p.update_meter(
                 gain_reduction_db=comp_gr,
+                threshold=d_threshold,
+                ratio=d_ratio,
+                attack_ms=d_attack,
+                release_ms=d_release,
                 band_gr_low=dyn_data.get('band_gr_low', 0.0),
                 band_gr_mid=dyn_data.get('band_gr_mid', 0.0),
-                band_gr_high=rt_data.get('band_gr_high', 0.0),
+                band_gr_high=dyn_data.get('band_gr_high', 0.0),
             )
 
     def _get_right_panel_chain(self):
@@ -9127,7 +9203,8 @@ class LongPlayStudioV4(QMainWindow):
                         if "ceiling" in mx:
                             chain.maximizer.set_ceiling(mx["ceiling"])
                         if "irc_mode" in mx:
-                            chain.maximizer.set_irc_mode(mx["irc_mode"])
+                            sub_mode = mx.get("irc_sub_mode", None)
+                            chain.maximizer.set_irc_mode(mx["irc_mode"], sub_mode)
 
     def _apply_realtime_preview(self):
         """V5.10: Smooth real-time preview using numpy + double-buffered WAV swap.

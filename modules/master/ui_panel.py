@@ -4228,7 +4228,7 @@ class MasterPanel(QWidget):
         self.res_mode_combo.addItems(["soft", "hard"])
         self.res_mode_combo.setStyleSheet(f"""
             QComboBox {{
-                background: {C_PANEL_INSET}; color: {C_TEXT};
+                background: {C_PANEL_INSET}; color: {C_CREAM};
                 border: 1px solid {C_GROOVE}; border-radius: 3px;
                 padding: 2px 8px; font-size: 10px; font-weight: bold;
             }}
@@ -6220,11 +6220,13 @@ class MasterPanel(QWidget):
         threading.Thread(target=_analyze, daemon=True).start()
 
     def _on_softclip_toggled(self, checked: bool):
-        self.chain.maximizer.set_soft_clip(checked, self.max_softclip_pct.value())
+        pct = getattr(self.chain.maximizer, 'soft_clip_pct', 50)
+        self.chain.maximizer.set_soft_clip(checked, pct)
         self._schedule_auto_preview()
 
     def _on_softclip_pct_changed(self, value: int):
-        self.chain.maximizer.set_soft_clip(self.max_softclip_chk.isChecked(), value)
+        enabled = getattr(self.chain.maximizer, 'soft_clip', False)
+        self.chain.maximizer.set_soft_clip(enabled, value)
         self._schedule_auto_preview()
 
     def _on_transient_changed(self, value: int):
@@ -6235,7 +6237,8 @@ class MasterPanel(QWidget):
         for btn in self.max_band_btns:
             btn.setChecked(btn.text() == band)
         self._update_band_button_styles()
-        self.chain.maximizer.set_transient_emphasis(self.max_transient.value(), band)
+        current_pct = getattr(self.chain.maximizer, 'transient_emphasis_pct', 0)
+        self.chain.maximizer.set_transient_emphasis(current_pct, band)
         self._schedule_auto_preview()
 
     def _update_band_button_styles(self):
@@ -6257,8 +6260,9 @@ class MasterPanel(QWidget):
                 """)
 
     def _on_stereo_ind_changed(self):
-        self.chain.maximizer.set_stereo_independence(
-            self.max_si_transient.value(), self.max_si_sustain.value())
+        trans = getattr(self.chain.maximizer, 'stereo_ind_transient', 50)
+        sust = getattr(self.chain.maximizer, 'stereo_ind_sustain', 50)
+        self.chain.maximizer.set_stereo_independence(trans, sust)
         self._schedule_auto_measure()
         self._schedule_auto_preview()
 
@@ -7431,6 +7435,18 @@ class MasterPanel(QWidget):
                             tp_left=rt_entry["left_peak_db"],
                             tp_right=rt_entry["right_peak_db"],
                         )
+
+                    # V5.10.5 FIX: Forward RT meter data to popup panels
+                    # Without this, popup panels get NO data during RT playback
+                    # because _meter_buffer is empty and the method returns early below.
+                    if hasattr(self, '_popup_meter_forward') and self._popup_meter_forward:
+                        try:
+                            fwd = dict(rt_entry)
+                            if hasattr(self, 'chain') and hasattr(self.chain, 'stage_meter_data'):
+                                fwd['_stage_data'] = self.chain.stage_meter_data.copy()
+                            self._popup_meter_forward(fwd)
+                        except Exception:
+                            pass
             except Exception:
                 pass  # Silently skip meter errors
 
@@ -7626,9 +7642,7 @@ class MasterPanel(QWidget):
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
 
             if reply == QMessageBox.StandardButton.Yes:
-                with open(latest, 'r', encoding='utf-8') as f:
-                    settings = json.load(f)
-                self.chain.load_settings(settings)
+                self.chain.load_settings(latest)
                 self._sync_maximizer_ui()
                 self.meters.set_status("SESSION RECOVERED", C_LED_GREEN)
         except Exception as e:

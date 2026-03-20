@@ -173,6 +173,12 @@ class Dynamics:
             CompressorBand("High", 4000, 20000),
         ]
 
+        # V5.10.5: Post-mastering scale factor (0.0-1.0) for intensity adjustment
+        self.post_scale = 1.0
+
+        # V5.10.5: Per-band gain reduction tracking for meter panels
+        self.last_band_gr = {"low": 0.0, "mid": 0.0, "high": 0.0}
+
     def set_threshold(self, value: float):
         self.single_band.threshold = value
 
