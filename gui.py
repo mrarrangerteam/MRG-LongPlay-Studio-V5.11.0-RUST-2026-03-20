@@ -7587,6 +7587,50 @@ class LongPlayStudioV4(QMainWindow):
         header_line.setStyleSheet("background: #00B4D8;")
         layout.addWidget(header_line)
 
+        # ── AI MASTER + MASTER EXPORT buttons (top) ──
+        action_btns_row = QHBoxLayout()
+        action_btns_row.setSpacing(6)
+
+        self.btn_ai_master = QPushButton("🤖 AI MASTER")
+        self.btn_ai_master.setFixedHeight(36)
+        self.btn_ai_master.setStyleSheet("""
+            QPushButton {
+                background: qlineargradient(x1:0,y1:0,x2:0,y2:1,
+                    stop:0 #FF9500, stop:1 #CC7700);
+                color: #0A0A0C; border: none; border-radius: 5px;
+                padding: 6px 10px; font-weight: bold; font-size: 11px;
+                font-family: 'Menlo', monospace;
+            }
+            QPushButton:hover {
+                background: qlineargradient(x1:0,y1:0,x2:0,y2:1,
+                    stop:0 #FFB340, stop:1 #FF9500);
+            }
+        """)
+        self.btn_ai_master.setToolTip("AI Master: วิเคราะห์ทุกเพลง + ตั้งค่าอัตโนมัติ")
+        self.btn_ai_master.clicked.connect(self._run_ai_master)
+        action_btns_row.addWidget(self.btn_ai_master)
+
+        self.btn_open_full_master = QPushButton("⚡ MASTER EXPORT")
+        self.btn_open_full_master.setFixedHeight(36)
+        self.btn_open_full_master.setStyleSheet("""
+            QPushButton {
+                background: qlineargradient(x1:0,y1:0,x2:0,y2:1,
+                    stop:0 #FFB340, stop:0.5 #FF9500, stop:1 #CC7700);
+                color: #1A1A1E; border: 1px solid #CC7700; border-radius: 5px;
+                padding: 6px 10px; font-weight: bold; font-size: 11px;
+                font-family: 'Menlo', monospace; letter-spacing: 1px;
+            }
+            QPushButton:hover {
+                background: qlineargradient(x1:0,y1:0,x2:0,y2:1,
+                    stop:0 #FFD060, stop:1 #FFB340);
+            }
+        """)
+        self.btn_open_full_master.setToolTip("Master & export all tracks")
+        self.btn_open_full_master.clicked.connect(self._master_export_from_right_panel)
+        action_btns_row.addWidget(self.btn_open_full_master)
+
+        layout.addLayout(action_btns_row)
+
         # ── Mastering Preset dropdown ──
         if _HAS_PRESETS and MASTERING_PRESET_NAMES:
             preset_row = QHBoxLayout()
@@ -8004,62 +8048,6 @@ class LongPlayStudioV4(QMainWindow):
         """)
         ts_btn.clicked.connect(self._generate_timestamps)
         layout.addWidget(ts_btn)
-
-        # V5.10: MASTER EXPORT button — render mastered audio directly from right panel
-        self.btn_open_full_master = QPushButton("⚡  MASTER EXPORT")
-        self.btn_open_full_master.setFixedHeight(44)
-        self.btn_open_full_master.setStyleSheet("""
-            QPushButton {
-                background: qlineargradient(x1:0,y1:0,x2:0,y2:1,
-                    stop:0 #FFB340, stop:0.1 #FF9500, stop:0.9 #CC7700, stop:1 #664400);
-                color: #1A1A1E;
-                border: 2px solid #CC7700;
-                border-top: 2px solid #FFB340;
-                border-radius: 6px;
-                padding: 8px;
-                font-size: 13px;
-                font-weight: bold;
-                font-family: 'Menlo', monospace;
-                letter-spacing: 2px;
-            }
-            QPushButton:hover {
-                background: qlineargradient(x1:0,y1:0,x2:0,y2:1,
-                    stop:0 #FFD060, stop:0.1 #FFB340, stop:0.9 #FF9500, stop:1 #CC7700);
-                border-color: #FFB340;
-            }
-            QPushButton:pressed {
-                background: #664400;
-            }
-        """)
-        self.btn_open_full_master.setToolTip(
-            "Master & export all tracks with current Maximizer settings\n"
-            "(Gain, Ceiling, IRC Mode)")
-        self.btn_open_full_master.clicked.connect(self._master_export_from_right_panel)
-        layout.addWidget(self.btn_open_full_master)
-
-        # ── AI Master button ──
-        self.btn_ai_master = QPushButton("🤖  AI MASTER")
-        self.btn_ai_master.setFixedHeight(40)
-        self.btn_ai_master.setStyleSheet("""
-            QPushButton {
-                background: qlineargradient(x1:0,y1:0,x2:0,y2:1,
-                    stop:0 #FF9500, stop:1 #CC7700);
-                color: #0A0A0C;
-                border: none; border-radius: 6px;
-                padding: 8px 16px;
-                font-weight: bold; font-size: 12px;
-                font-family: 'SF Pro Display', 'Menlo', monospace;
-            }
-            QPushButton:hover {
-                background: qlineargradient(x1:0,y1:0,x2:0,y2:1,
-                    stop:0 #FFB340, stop:1 #FF9500);
-            }
-        """)
-        self.btn_ai_master.setToolTip(
-            "AI Master: วิเคราะห์ทุกเพลงใน playlist\n"
-            "แล้วตั้งค่า Gain/EQ/Dynamics/IRC อัตโนมัติ")
-        self.btn_ai_master.clicked.connect(self._run_ai_master)
-        layout.addWidget(self.btn_ai_master)
 
         layout.addStretch()
         parent_scroll.setWidget(panel)
@@ -14232,15 +14220,30 @@ def main():
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
     # Dark theme is set per-widget using Colors class
-    
+
     # Check license first
     if not check_and_show_license(app):
         print("❌ License required. Exiting.")
         sys.exit(1)
-    
+
     window = LongPlayStudioV4()
     window.show()
-    
+
+    # Auto-load audio folder from command line: python3 gui.py --folder /path/to/folder
+    if "--folder" in sys.argv:
+        idx = sys.argv.index("--folder")
+        if idx + 1 < len(sys.argv):
+            folder = sys.argv[idx + 1]
+            if os.path.isdir(folder):
+                import glob
+                audio_exts = ['*.wav', '*.mp3', '*.flac', '*.aac', '*.m4a', '*.ogg', '*.aiff']
+                files = []
+                for ext in audio_exts:
+                    files.extend(glob.glob(os.path.join(folder, ext)))
+                if files:
+                    print(f"[AUTO-LOAD] Loading {len(files)} files from {folder}")
+                    QTimer.singleShot(500, lambda: window._process_audio_files(sorted(files)))
+
     sys.exit(app.exec())
 
 
