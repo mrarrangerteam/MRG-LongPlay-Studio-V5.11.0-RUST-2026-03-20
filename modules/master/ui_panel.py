@@ -7520,6 +7520,13 @@ class MasterPanel(QWidget):
         if stage in stage_names and hasattr(self, 'live_stage_label'):
             self.live_stage_label.setText(f"STAGE: {stage_names[stage]}")
 
+        # V5.10.5: Forward meter data to popup panels (gui.py hook)
+        if hasattr(self, '_popup_meter_forward') and self._popup_meter_forward:
+            try:
+                self._popup_meter_forward(latest)
+            except Exception:
+                pass
+
     def _start_meter_timer(self, stage_text="STAGE: ⏳ RENDERING..."):
         """Start the meter update timer (for rendering or playback metering)."""
         if hasattr(self, '_meter_update_timer'):

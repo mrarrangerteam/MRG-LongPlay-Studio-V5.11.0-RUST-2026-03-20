@@ -8939,21 +8939,36 @@ class LongPlayStudioV4(QMainWindow):
             self._master_rerender_timer.timeout.connect(self._apply_realtime_preview)
         self._master_rerender_timer.start(150)
 
-    def _feed_meter_panels(self):
-        """Feed audio meter data from chain/RT engine/MasterPanel to popup panels (20fps).
+    def _on_forwarded_meter_data(self, levels: dict):
+        """Receive meter data forwarded from MasterPanel._update_realtime_meters().
 
-        Data sources (priority order):
-        1. RT engine (real-time playback) — peak, RMS, GR, correlation
-        2. MasterPanel meter buffer (offline render) — LUFS, GR, peaks per stage
-        3. Knob values (always available) — gain, width, soothe amount, compress
+        This is the SAME data that drives the working LUFS/TP meters.
+        Stored for pickup by _feed_meter_panels() on its 50ms timer.
+        """
+        self._last_meter_levels = levels
+
+    def _install_meter_forward_hook(self):
+        """Install forwarding hook on MasterPanel so popup panels get real data."""
+        mw = getattr(self, '_master_window', None)
+        if mw and not getattr(mw, '_popup_meter_forward', None):
+            mw._popup_meter_forward = self._on_forwarded_meter_data
+
+    def _feed_meter_panels(self):
+        """Feed audio meter data to popup panels using SAME source as LUFS meter.
+
+        Data comes from MasterPanel._update_realtime_meters() via forwarding hook.
+        This ensures popup panels show the exact same data as the working meters.
         """
         if not hasattr(self, '_meter_panels') or not self._meter_panels:
             return
 
-        # ─── Gather data from all sources ───
-        chain = getattr(self, '_right_chain', None)
-        rt = getattr(self, '_rt_engine', None)
-        mw = getattr(self, '_master_window', None)
+        # Try to install hook if not yet done
+        self._install_meter_forward_hook()
+
+        # Get forwarded data (same source as working LUFS/TP meters)
+        levels = getattr(self, '_last_meter_levels', None)
+        if not levels:
+            return
 
         # Read current knob values
         gain_db = self.right_gain_dial.value() if hasattr(self, 'right_gain_dial') else 0.0
@@ -8962,39 +8977,11 @@ class LongPlayStudioV4(QMainWindow):
         compress_amt = self.right_compress_knob.value() if hasattr(self, 'right_compress_knob') else 0
         ceiling = self.right_ceiling_spin.value() if hasattr(self, 'right_ceiling_spin') else -1.0
 
-        # Source 1: RT engine (real-time playback)
-        rt_data = {}
-        if rt and hasattr(rt, 'get_meter_data'):
-            try:
-                if rt.is_playing():
-                    rt_data = rt.get_meter_data()
-            except Exception:
-                pass
-
-        # Source 2: MasterPanel meter buffer (offline rendering / chain callback)
-        chain_data = {}
-        if mw and hasattr(mw, '_meter_buffer') and hasattr(mw, '_meter_lock'):
-            try:
-                import threading
-                with mw._meter_lock:
-                    if mw._meter_buffer:
-                        # Get latest "final" stage entry, or last entry
-                        for entry in reversed(mw._meter_buffer):
-                            if entry.get('stage') in ('final', 'post_maximizer', 'playback'):
-                                chain_data = entry
-                                break
-                        if not chain_data:
-                            chain_data = mw._meter_buffer[-1]
-            except Exception:
-                pass
-
-        # Merge: RT engine takes priority, chain_data fills gaps
-        peak_l = rt_data.get('peak_l', chain_data.get('left_peak_db', -60.0))
-        peak_r = rt_data.get('peak_r', chain_data.get('right_peak_db', -60.0))
-        gr_db = rt_data.get('gain_reduction_db', chain_data.get('gain_reduction_db', 0.0))
-        lufs = rt_data.get('lufs', chain_data.get('lufs_integrated',
-               chain_data.get('lufs', -14.0)))
-        corr = rt_data.get('correlation', chain_data.get('correlation', 1.0))
+        # Extract from forwarded levels dict (same keys as chain._send_meter())
+        peak_l = levels.get('left_peak_db', -60.0)
+        peak_r = levels.get('right_peak_db', -60.0)
+        gr_db = levels.get('gain_reduction_db', 0.0)
+        lufs = levels.get('lufs_integrated', levels.get('lufs', -14.0))
 
         # ─── Feed each panel ───
 
@@ -9016,8 +9003,9 @@ class LongPlayStudioV4(QMainWindow):
         # Imager panel
         p = self._meter_panels.get("imager")
         if p and p.isVisible():
-            vl = rt_data.get('rms_l', chain_data.get('left_rms_db', 0.0))
-            vr = rt_data.get('rms_r', chain_data.get('right_rms_db', 0.0))
+            vl = levels.get('left_rms_db', 0.0)
+            vr = levels.get('right_rms_db', 0.0)
+            corr = levels.get('correlation', 1.0)
             p.update_meter(
                 width=int(width_val),
                 correlation=corr,
@@ -9028,7 +9016,7 @@ class LongPlayStudioV4(QMainWindow):
         p = self._meter_panels.get("soothe")
         if p and p.isVisible():
             reduction = None
-            # Try MasterPanel chain first, then right_chain
+            mw = getattr(self, '_master_window', None)
             for src in [mw, self]:
                 ch = getattr(src, 'chain', None) or getattr(src, '_right_chain', None)
                 if ch and hasattr(ch, 'soothe') and hasattr(ch.soothe, 'get_reduction_spectrum'):
@@ -9046,11 +9034,11 @@ class LongPlayStudioV4(QMainWindow):
         # Compressor panel
         p = self._meter_panels.get("compressor")
         if p and p.isVisible():
-            comp_gr = rt_data.get('compress_gr', chain_data.get('gain_reduction_db', 0.0))
+            comp_gr = gr_db if compress_amt > 0 else 0.0
             p.update_meter(
-                gain_reduction_db=comp_gr if compress_amt > 0 else 0.0,
-                band_gr_low=rt_data.get('band_gr_low', 0.0),
-                band_gr_mid=rt_data.get('band_gr_mid', 0.0),
+                gain_reduction_db=comp_gr,
+                band_gr_low=levels.get('band_gr_low', 0.0),
+                band_gr_mid=levels.get('band_gr_mid', 0.0),
                 band_gr_high=rt_data.get('band_gr_high', 0.0),
             )
 

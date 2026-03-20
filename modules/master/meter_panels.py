@@ -112,7 +112,11 @@ class BaseMeterPanel(QWidget):
     
     def __init__(self, title="Meter", width=520, height=300, parent=None):
         super().__init__(parent)
-        self.setWindowFlags(Qt.WindowType.Tool | Qt.WindowType.FramelessWindowHint)
+        self.setWindowFlags(
+            Qt.WindowType.Window
+            | Qt.WindowType.FramelessWindowHint
+            | Qt.WindowType.WindowStaysOnTopHint
+        )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, False)
         self.setFixedSize(width, height)
         self.setStyleSheet(f"""
