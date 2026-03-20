@@ -105,6 +105,10 @@ class Imager:
         self.balance = 0.0          # -1.0 (full left) to +1.0 (full right)
         self.mono_bass_freq = 0     # Hz (0 = disabled, >0 = mono below this freq)
 
+        # Correlation safety (V5.11 — auto-reduce width on low correlation)
+        self.correlation_safety = True
+        self.min_correlation = 0.2
+
         # Stereoize modes (V5.11 — delay/phase-based stereo decorrelation)
         self.stereoize_mode = "off"   # "off", "I", "II"
         self.stereoize_amount = 0     # 0-100
@@ -244,6 +248,94 @@ class Imager:
         elif self.stereoize_mode == "II":
             return self.stereoize_ii(audio, self.stereoize_amount, sr)
         return audio
+
+    def apply_correlation_safety(self, audio: np.ndarray, sr: int,
+                                  min_correlation: float = 0.2) -> np.ndarray:
+        """Auto-reduce stereo width if correlation drops too low.
+
+        AI-generated music sometimes has weird phase issues.
+        This prevents mono compatibility problems.
+
+        Args:
+            audio: 2-D NumPy array, shape (num_samples, 2).
+            sr: Sample rate in Hz.
+            min_correlation: Minimum acceptable correlation (default 0.2).
+
+        Returns:
+            Processed audio with safe stereo field (same shape).
+        """
+        if audio.ndim != 2 or audio.shape[1] != 2:
+            return audio
+
+        # Use instance setting if not overridden
+        if min_correlation is None:
+            min_correlation = self.min_correlation
+
+        n_samples = audio.shape[0]
+
+        # Step 1: Compute inter-channel correlation over 50ms windows
+        window_size = int(0.050 * sr)  # 50ms
+        if window_size < 1:
+            window_size = 1
+        hop = window_size // 2
+        if hop < 1:
+            hop = 1
+
+        n_windows = max(1, (n_samples - window_size) // hop)
+
+        # Per-sample width multiplier (1.0 = keep, lower = narrower)
+        width_envelope = np.ones(n_samples, dtype=np.float64)
+
+        for i in range(n_windows):
+            start = i * hop
+            end = start + window_size
+            if end > n_samples:
+                break
+
+            left = audio[start:end, 0]
+            right = audio[start:end, 1]
+
+            # Compute Pearson correlation
+            l_mean = np.mean(left)
+            r_mean = np.mean(right)
+            l_centered = left - l_mean
+            r_centered = right - r_mean
+            numerator = np.sum(l_centered * r_centered)
+            denominator = np.sqrt(np.sum(l_centered ** 2) * np.sum(r_centered ** 2))
+
+            if denominator > 1e-12:
+                corr = numerator / denominator
+            else:
+                corr = 1.0  # silence -> treat as fine
+
+            # Step 2: If correlation < min_correlation, reduce width for that segment
+            if corr < min_correlation:
+                # Scale width reduction by how far below threshold we are
+                # At corr=min_correlation -> factor=1.0, at corr=-1 -> factor=0.0
+                factor = max(0.0, (corr + 1.0) / (min_correlation + 1.0))
+                width_envelope[start:end] = np.minimum(
+                    width_envelope[start:end], factor
+                )
+
+        # Step 3: Smooth the width changes to avoid artifacts
+        # Use a 10ms smoothing window
+        smooth_size = max(1, int(0.010 * sr))
+        kernel = np.ones(smooth_size, dtype=np.float64) / smooth_size
+        width_envelope = np.convolve(width_envelope, kernel, mode='same')
+
+        # Apply: blend toward mono based on width_envelope
+        mid = (audio[:, 0] + audio[:, 1]) * 0.5
+        side = (audio[:, 0] - audio[:, 1]) * 0.5
+
+        # Scale side signal by envelope
+        side_scaled = side * width_envelope
+
+        result = np.column_stack([
+            mid + side_scaled,
+            mid - side_scaled,
+        ])
+
+        return result
 
     def _width_to_stereotools_param(self, width_pct: int) -> float:
         """

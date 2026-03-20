@@ -13,8 +13,12 @@ Features:
 """
 
 from typing import Optional, Dict
+
+import numpy as np
+
 from .analyzer import AudioAnalyzer, AudioAnalysis
 from .loudness import LoudnessMeter, LoudnessAnalysis
+from .match_eq import _extract_mono_pcm, _compute_avg_spectrum, _spectrum_to_bands, THIRD_OCTAVE_CENTERS
 from .genre_profiles import (
     GENRE_PROFILES, PLATFORM_TARGETS, IRC_MODES,
     get_genre_profile, get_genre_list, get_irc_mode,
@@ -247,3 +251,95 @@ class AIAssist:
     def get_platform_list(self) -> Dict:
         """Get available platform targets."""
         return PLATFORM_TARGETS
+
+    def compute_tonal_correction(self, audio_path: str,
+                                  target_curve: str = "neutral") -> Optional[Dict[float, float]]:
+        """Analyze tonal balance and compute corrective EQ.
+
+        Compares the audio's average spectrum to a target frequency response
+        curve and returns per-band corrections in dB.
+
+        Args:
+            audio_path: Path to the audio file to analyze.
+            target_curve: One of "neutral", "warm", "bright", "bass_heavy".
+
+        Returns:
+            Dict mapping frequency (Hz) to correction in dB, or None on failure.
+        """
+        # ── Target curve definitions (offsets in dB per 1/3-octave band) ──
+        # Bands: 20, 25, 31.5, 40, 50, 63, 80, 100, 125, 160,
+        #        200, 250, 315, 400, 500, 630, 800, 1000, 1250, 1600,
+        #        2000, 2500, 3150, 4000, 5000, 6300, 8000, 10000, 12500, 16000, 20000
+        n = len(THIRD_OCTAVE_CENTERS)
+
+        # ISO 226 equal-loudness approximation: ears are less sensitive
+        # at low and very high frequencies. "Neutral" compensates for this
+        # so the perceived response sounds flat.
+        iso226_offset = np.array([
+            -4.0, -3.5, -3.0, -2.5, -2.0, -1.5, -1.0, -0.5, -0.3, -0.1,
+             0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.2,  0.3,
+             0.2,  0.0, -0.2, -0.5, -0.8, -1.2, -1.5, -2.0, -3.0, -4.0,
+            -5.0,
+        ], dtype=np.float64)[:n]
+
+        target_curves = {
+            "neutral": iso226_offset,
+            "warm": iso226_offset + np.concatenate([
+                np.zeros(6),                          # below 63 Hz: no extra
+                np.full(4, 0.5),                      # 80-160 Hz: +0.5
+                np.full(6, 1.0),                      # 200-630 Hz: +1.0 low-mids
+                np.full(4, 0.0),                      # 800-1600 Hz: flat
+                np.full(5, -0.5),                     # 2k-5k Hz: -0.5
+                np.full(6, -1.0),                     # 6.3k-20k Hz: -1.0 highs
+            ])[:n],
+            "bright": iso226_offset + np.concatenate([
+                np.zeros(6),                          # below 63 Hz: no extra
+                np.full(4, -0.5),                     # 80-160 Hz: -0.5
+                np.full(6, -1.0),                     # 200-630 Hz: -1.0 low-mids
+                np.full(4, 0.0),                      # 800-1600 Hz: flat
+                np.full(5, 0.5),                      # 2k-5k Hz: +0.5
+                np.full(6, 1.0),                      # 6.3k-20k Hz: +1.0 highs
+            ])[:n],
+            "bass_heavy": iso226_offset + np.concatenate([
+                np.full(4, 2.0),                      # 20-40 Hz: +2 dB
+                np.full(3, 2.0),                      # 50-80 Hz: +2 dB (below 100 Hz)
+                np.full(1, 1.0),                      # 100 Hz: +1 dB taper
+                np.zeros(n - 8),                      # rest: flat
+            ])[:n],
+        }
+
+        if target_curve not in target_curves:
+            print(f"[AI ASSIST] Unknown target curve: {target_curve}")
+            return None
+
+        target = target_curves[target_curve]
+
+        # Step 1: Compute average spectrum of the audio (FFT over full track)
+        samples = _extract_mono_pcm(audio_path, self.ffmpeg_path)
+        if samples is None or len(samples) < 8192:
+            print(f"[AI ASSIST] Could not extract audio from: {audio_path}")
+            return None
+
+        full_spectrum = _compute_avg_spectrum(samples)
+        band_spectrum = _spectrum_to_bands(full_spectrum)
+
+        # Step 2: Compare to target curve — normalize both to mean
+        band_mean = np.mean(band_spectrum)
+        target_mean = np.mean(target)
+        normalized_spectrum = band_spectrum - band_mean
+        normalized_target = target - target_mean
+
+        # Step 3: Compute per-band correction in dB
+        corrections = normalized_target - normalized_spectrum
+
+        # Clamp corrections to a sensible range
+        corrections = np.clip(corrections, -6.0, 6.0)
+
+        # Step 4: Return corrections dict: {freq: correction_db}
+        result: Dict[float, float] = {}
+        for i, freq in enumerate(THIRD_OCTAVE_CENTERS):
+            result[float(freq)] = round(float(corrections[i]), 2)
+
+        print(f"[AI ASSIST] Tonal correction computed (curve={target_curve}, "
+              f"bands={len(result)})")
+        return result

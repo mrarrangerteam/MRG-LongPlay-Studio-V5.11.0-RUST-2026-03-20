@@ -37,6 +37,7 @@ from .ai_assist import AIAssist, MasterRecommendation
 from .genre_profiles import PLATFORM_TARGETS, IRC_MODES, get_irc_mode
 from .limiter import LookAheadLimiter, LookAheadLimiterFast
 from .soothe import SootheProcessor
+from .match_eq import MatchEQ, _extract_mono_pcm, _compute_avg_spectrum, _spectrum_to_bands, THIRD_OCTAVE_CENTERS
 
 # ─── Audio processing dependencies ───
 try:
@@ -1072,6 +1073,10 @@ class MasterChain:
         self.soothe = SootheProcessor()
         self.maximizer = Maximizer()
 
+        # Match EQ (reference track matching)
+        self.match_eq = MatchEQ(ffmpeg_path)
+        self._match_eq_curve = None  # stored for UI display
+
         # Loudness tools
         self.loudness_meter = LoudnessMeter(ffmpeg_path)
         self.ai_assist = AIAssist(ffmpeg_path)
@@ -1153,6 +1158,73 @@ class MasterChain:
             self.target_lufs = target["target_lufs"]
             self.target_tp = target["true_peak"]
             self.maximizer.set_ceiling(self.target_tp)
+
+    # ─── Match EQ to Reference ───
+
+    def match_eq_to_reference(self, reference_path: str, strength: float = 0.7):
+        """Match current audio's tonal balance to a reference track.
+
+        Analyzes both tracks' spectra, computes difference curve,
+        and applies corrective EQ. Perfect for making 20 AI tracks
+        sound consistent.
+
+        Args:
+            reference_path: Path to the reference audio file.
+            strength: How aggressively to match (0.0 = off, 1.0 = full match).
+
+        Returns:
+            dict with match report, or None on failure.
+        """
+        if not self.input_path or not os.path.exists(self.input_path):
+            print("[CHAIN] No input audio loaded for Match EQ")
+            return None
+        if not os.path.exists(reference_path):
+            print(f"[CHAIN] Reference file not found: {reference_path}")
+            return None
+
+        strength = max(0.0, min(1.0, float(strength)))
+
+        # Step 1: Load reference audio spectrum (average FFT over the track)
+        ref_ok = self.match_eq.load_reference(reference_path)
+        if not ref_ok:
+            print("[CHAIN] Failed to analyze reference audio")
+            return None
+
+        # Step 2: Load current audio spectrum
+        cur_ok = self.match_eq.analyze_current(self.input_path)
+        if not cur_ok:
+            print("[CHAIN] Failed to analyze current audio")
+            return None
+
+        # Step 3: Set strength (this triggers difference curve computation)
+        self.match_eq.strength = strength
+
+        # Step 4: Get the correction curve (reference - current) in dB per band
+        correction = self.match_eq.correction_curve
+        if correction is None:
+            print("[CHAIN] Match EQ: no correction curve computed")
+            return None
+
+        # Step 5: Map difference to EQ bands (top 8 bands by magnitude)
+        applied = self.match_eq.apply_to_equalizer(self.equalizer)
+        if not applied:
+            print("[CHAIN] Match EQ: failed to apply correction to EQ")
+            return None
+
+        # Step 6: Store the match curve for UI display
+        self._match_eq_curve = {
+            "band_centers_hz": THIRD_OCTAVE_CENTERS.tolist(),
+            "correction_db": correction.tolist(),
+            "reference_spectrum": (self.match_eq.reference_spectrum.tolist()
+                                   if self.match_eq.reference_spectrum is not None else []),
+            "current_spectrum": (self.match_eq.current_spectrum.tolist()
+                                 if self.match_eq.current_spectrum is not None else []),
+        }
+
+        report = self.match_eq.get_report()
+        print(f"[CHAIN] Match EQ applied (strength={strength*100:.0f}%, "
+              f"ref={os.path.basename(reference_path)})")
+        return report
 
     # ─── AI Recommend (unchanged) ───
 
