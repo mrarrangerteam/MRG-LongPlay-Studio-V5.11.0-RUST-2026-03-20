@@ -656,15 +656,17 @@ class _RealAudioProcessor:
 
     @staticmethod
     def _true_peak_limit(data, sr, ceiling_db):
-        """True Peak Limiter (ITU-R BS.1770-4) with 4x oversampling ISP detection.
+        """True Peak Limiter (ITU-R BS.1770-4) with 4x oversampling ISP.
 
-        Per-chunk: upsample 4x → detect peaks → compute gain reduction →
-        apply with 1ms look-ahead smoothing → downsample → hard clip safety.
+        Vectorized: upsample 4x → compute gain where peaks exceed ceiling →
+        smooth with minimum_filter1d (look-ahead) → apply → downsample → clip.
         """
         try:
+            from scipy.ndimage import minimum_filter1d
+
             ceiling_linear = 10 ** (ceiling_db / 20.0)
             result = data.copy().astype(np.float64)
-            chunk_size = sr  # process 1 second at a time
+            chunk_size = sr
 
             for ch in range(data.shape[1] if data.ndim > 1 else 1):
                 signal = data[:, ch].astype(np.float64) if data.ndim > 1 else data.astype(np.float64)
@@ -679,20 +681,17 @@ class _RealAudioProcessor:
                     x_4x = resample_poly(chunk, 4, 1)
                     peaks = np.abs(x_4x)
 
-                    # Look-ahead window (1ms at 4x rate)
-                    lookahead = max(4, int(sr * 4 * 0.001))
+                    # Where peaks exceed ceiling, compute gain reduction
+                    over = peaks > ceiling_linear
+                    if not np.any(over):
+                        continue  # No peaks exceed ceiling — skip
 
-                    # Compute gain envelope at 4x rate
                     gain_4x = np.ones_like(x_4x)
-                    for i in range(len(x_4x)):
-                        if peaks[i] > ceiling_linear:
-                            reduction = ceiling_linear / peaks[i]
-                            la_start = max(0, i - lookahead)
-                            la_end = min(len(x_4x), i + lookahead)
-                            for j in range(la_start, la_end):
-                                dist = abs(j - i) / max(1, lookahead)
-                                smooth = 1.0 - (1.0 - reduction) * (1.0 - dist * dist)
-                                gain_4x[j] = min(gain_4x[j], smooth)
+                    gain_4x[over] = ceiling_linear / peaks[over]
+
+                    # Smooth gain with look-ahead (1ms at 4x rate)
+                    la = max(4, int(sr * 4 * 0.001))
+                    gain_4x = minimum_filter1d(gain_4x, size=la)
 
                     # Apply gain at 4x rate
                     x_4x *= gain_4x
@@ -700,7 +699,7 @@ class _RealAudioProcessor:
                     # Downsample back
                     x_limited = resample_poly(x_4x, 1, 4)[:len(chunk)]
 
-                    # Hard clip safety
+                    # Hard clip safety net
                     x_limited = np.clip(x_limited, -ceiling_linear, ceiling_linear)
 
                     if data.ndim > 1:

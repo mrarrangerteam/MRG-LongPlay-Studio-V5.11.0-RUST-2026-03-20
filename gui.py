@@ -7685,7 +7685,7 @@ class LongPlayStudioV4(QMainWindow):
         irc_row.addWidget(self.right_irc_combo, 1)
         layout.addLayout(irc_row)
 
-        # ── IRC Sub-mode dropdown (only IRC 3 & 4: Pumping/Balanced/Crisp) ──
+        # ── IRC Sub-mode dropdown (IRC 3: Pumping/Balanced/Crisp/Clipping, IRC 4: Classic/Modern/Transient) ──
         self.right_irc_submode_row = QHBoxLayout()
         self.right_irc_submode_row.setSpacing(4)
         self.right_irc_submode_lbl = QLabel("SUB-MODE")
@@ -8588,7 +8588,13 @@ class LongPlayStudioV4(QMainWindow):
                 self.right_irc_submode.clear()
                 for sm in sub_modes:
                     self.right_irc_submode.addItem(sm)
-                self.right_irc_submode.setCurrentText("Balanced")
+                # Set default: Balanced for IRC 3, Classic for IRC 4
+                if "Balanced" in sub_modes:
+                    self.right_irc_submode.setCurrentText("Balanced")
+                elif "Classic" in sub_modes:
+                    self.right_irc_submode.setCurrentText("Classic")
+                else:
+                    self.right_irc_submode.setCurrentIndex(0)
                 self.right_irc_submode_widget.setVisible(True)
             else:
                 self.right_irc_submode_widget.setVisible(False)
