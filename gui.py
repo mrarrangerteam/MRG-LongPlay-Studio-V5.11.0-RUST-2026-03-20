@@ -7796,57 +7796,38 @@ class LongPlayStudioV4(QMainWindow):
         output_row.addWidget(tp_indicator)
         layout.addLayout(output_row)
 
-        # ══ SOOTHE (Auto De-Harsh) — single row: toggle + amount ══
-        soothe_row = QHBoxLayout()
-        soothe_row.setSpacing(4)
-        self.right_res_enabled = QCheckBox("SOOTHE")
-        self.right_res_enabled.setChecked(False)
-        self.right_res_enabled.setStyleSheet(
-            "color: #EF5350; font-size: 9px; font-weight: bold; font-family: 'Menlo';")
-        self.right_res_enabled.setToolTip("Auto-remove harsh resonances (like Soothe2)")
-        self.right_res_enabled.toggled.connect(self._on_right_res_enabled)
-        soothe_row.addWidget(self.right_res_enabled)
-        self.right_res_depth = QSlider(Qt.Orientation.Horizontal)
-        self.right_res_depth.setRange(0, 200)
-        self.right_res_depth.setValue(50)
-        self.right_res_depth.setFixedHeight(16)
-        self.right_res_depth.setToolTip("Amount: 0 = off, 20 = maximum de-harsh")
-        self.right_res_depth.valueChanged.connect(self._on_right_res_depth)
-        soothe_row.addWidget(self.right_res_depth)
-        self.right_res_depth_val = QLabel("5.0")
-        self.right_res_depth_val.setStyleSheet(
-            "color: #EF5350; font-family: 'Menlo'; font-size: 9px; font-weight: bold;")
-        self.right_res_depth_val.setFixedWidth(24)
-        soothe_row.addWidget(self.right_res_depth_val)
-        layout.addLayout(soothe_row)
-        # Hidden defaults for mode/selectivity/mix/delta
+        # ══ SOOTHE + COMPRESS — Knob row (matches WIDTH/GAIN style) ══
+        sc_knobs_row = QHBoxLayout()
+        sc_knobs_row.setSpacing(6)
+
+        # ── SOOTHE knob ──
+        self.right_soothe_knob = OzoneRotaryKnob(
+            name="SOOTHE", min_val=0.0, max_val=100.0, default=0.0,
+            unit="%", decimals=0)
+        self.right_soothe_knob.valueChanged.connect(self._on_soothe_knob_changed)
+        sc_knobs_row.addWidget(self.right_soothe_knob, alignment=Qt.AlignmentFlag.AlignCenter)
+
+        # ── COMPRESS knob ──
+        self.right_compress_knob = OzoneRotaryKnob(
+            name="COMPRESS", min_val=0.0, max_val=100.0, default=0.0,
+            unit="%", decimals=0)
+        self.right_compress_knob.valueChanged.connect(self._on_compress_knob_changed)
+        sc_knobs_row.addWidget(self.right_compress_knob, alignment=Qt.AlignmentFlag.AlignCenter)
+
+        layout.addLayout(sc_knobs_row)
+
+        # Backward compat: keep old refs working
+        self.right_res_enabled = type('Obj', (), {'isChecked': lambda s: self.right_soothe_knob.value() > 0, 'setChecked': lambda s, v: None})()
+        self.right_res_depth = type('Obj', (), {'value': lambda s: int(self.right_soothe_knob.value() * 2), 'setValue': lambda s, v: self.right_soothe_knob.setValue(v / 2)})()
+        self.right_res_depth_val = QLabel("0")
+        self.right_res_depth_val.setVisible(False)
         self.right_res_mode = None
         self.right_res_mix = None
         self.right_res_delta = None
-
-        # ══ COMPRESS (Auto Dynamics) — single row: toggle + amount ══
-        comp_row = QHBoxLayout()
-        comp_row.setSpacing(4)
-        self.right_dyn_enabled = QCheckBox("COMPRESS")
-        self.right_dyn_enabled.setChecked(False)
-        self.right_dyn_enabled.setStyleSheet(
-            "color: #FF9800; font-size: 9px; font-weight: bold; font-family: 'Menlo';")
-        self.right_dyn_enabled.setToolTip("Auto compression — glue and control dynamics")
-        self.right_dyn_enabled.toggled.connect(self._on_right_dyn_enabled)
-        comp_row.addWidget(self.right_dyn_enabled)
-        self.right_dyn_amount = QSlider(Qt.Orientation.Horizontal)
-        self.right_dyn_amount.setRange(0, 100)
-        self.right_dyn_amount.setValue(30)
-        self.right_dyn_amount.setFixedHeight(16)
-        self.right_dyn_amount.setToolTip("Amount: 0 = gentle, 100 = heavy compression")
-        self.right_dyn_amount.valueChanged.connect(self._on_right_dyn_amount)
-        comp_row.addWidget(self.right_dyn_amount)
-        self.right_dyn_amount_val = QLabel("30%")
-        self.right_dyn_amount_val.setStyleSheet(
-            "color: #FF9800; font-family: 'Menlo'; font-size: 9px; font-weight: bold;")
-        self.right_dyn_amount_val.setFixedWidth(28)
-        comp_row.addWidget(self.right_dyn_amount_val)
-        layout.addLayout(comp_row)
+        self.right_dyn_enabled = type('Obj', (), {'isChecked': lambda s: self.right_compress_knob.value() > 0, 'setChecked': lambda s, v: None})()
+        self.right_dyn_amount = type('Obj', (), {'value': lambda s: int(self.right_compress_knob.value()), 'setValue': lambda s, v: self.right_compress_knob.setValue(v)})()
+        self.right_dyn_amount_val = QLabel("0%")
+        self.right_dyn_amount_val.setVisible(False)
 
         # ── Gain Reduction History (Ozone 12 waveform) ──
         if _HAS_MASTER_WIDGETS:
@@ -8412,6 +8393,36 @@ class LongPlayStudioV4(QMainWindow):
         self._trigger_master_rerender()
 
     # ══ Resonance Suppressor Handlers (right panel) ══
+
+    def _on_soothe_knob_changed(self, value):
+        """Soothe knob changed — enable/disable + set amount."""
+        amount = value
+        enabled = amount > 0
+        self.right_res_depth_val.setText(f"{amount:.0f}")
+        chain = self._get_right_panel_chain()
+        if chain and hasattr(chain, 'soothe'):
+            chain.soothe.enabled = enabled
+            chain.soothe.set_params(amount=amount)
+        if chain and hasattr(chain, 'resonance_suppressor'):
+            chain.resonance_suppressor.enabled = enabled
+            chain.resonance_suppressor.set_depth(amount / 10.0)
+        try:
+            if self._rt_engine and hasattr(self._rt_engine, 'set_res_bypass'):
+                self._rt_engine.set_res_bypass(not enabled)
+                if hasattr(self._rt_engine, 'set_res_depth'):
+                    self._rt_engine.set_res_depth(amount / 10.0)
+        except Exception:
+            pass
+        self._trigger_master_rerender()
+
+    def _on_compress_knob_changed(self, value):
+        """Compress knob changed — enable/disable + set amount."""
+        amount = value
+        enabled = amount > 0
+        self.right_dyn_amount_val.setText(f"{amount:.0f}%")
+        self._on_right_dyn_enabled(enabled)
+        if enabled:
+            self._on_right_dyn_amount(int(amount))
 
     def _on_right_res_enabled(self, checked):
         chain = self._get_right_panel_chain()
