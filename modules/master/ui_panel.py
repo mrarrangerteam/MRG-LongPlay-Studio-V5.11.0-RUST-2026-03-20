@@ -3134,6 +3134,198 @@ class MasterWorker(QThread):
 
 
 # ══════════════════════════════════════════════════
+#  V5.11.0: Stats for Nerds (YouTube-style loudness penalty)
+# ══════════════════════════════════════════════════
+class StatsForNerdsWidget(QFrame):
+    """YouTube 'Stats for Nerds' style widget showing loudness penalty per platform.
+
+    Shows:
+    - Your LUFS vs Platform Target
+    - Penalty (how much the platform will turn you down)
+    - True Peak status
+    - LRA (Loudness Range)
+    - Color-coded status (green/yellow/red)
+    """
+
+    PLATFORMS = {
+        "YouTube":      {"lufs": -14.0, "tp": -1.0},
+        "Spotify":      {"lufs": -14.0, "tp": -1.0},
+        "Apple Music":  {"lufs": -16.0, "tp": -1.0},
+        "Tidal":        {"lufs": -14.0, "tp": -1.0},
+        "Amazon":       {"lufs": -14.0, "tp": -2.0},
+        "SoundCloud":   {"lufs": -14.0, "tp": -1.0},
+        "CD":           {"lufs": -9.0,  "tp": -0.3},
+        "Radio (EBU)":  {"lufs": -23.0, "tp": -1.0},
+    }
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFixedWidth(250)
+        self.setStyleSheet(f"""
+            QFrame {{
+                background: #0C0E12;
+                border: 1px solid #1E1E22;
+                border-radius: 4px;
+            }}
+        """)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(8, 6, 8, 6)
+        layout.setSpacing(3)
+
+        # Title
+        title = QLabel("📊 STATS FOR NERDS")
+        title.setStyleSheet(f"color:{C_TEAL}; font-size:8px; font-weight:bold; "
+                           f"letter-spacing:2px; border:none; background:transparent;")
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(title)
+
+        # Platform selector
+        plat_row = QHBoxLayout()
+        plat_row.setSpacing(4)
+        plat_lbl = QLabel("PLATFORM")
+        plat_lbl.setStyleSheet(f"color:#6B6B70; font-size:7px; font-weight:bold; "
+                              f"letter-spacing:1px; border:none; background:transparent;")
+        plat_row.addWidget(plat_lbl)
+        self.platform_combo = QComboBox()
+        self.platform_combo.addItems(list(self.PLATFORMS.keys()))
+        self.platform_combo.setCurrentText("YouTube")
+        self.platform_combo.setStyleSheet(f"""
+            QComboBox {{
+                background: #141418; color: {C_TEAL_GLOW};
+                border: 1px solid #2A2A30; border-radius: 2px;
+                padding: 1px 4px; font-size: 8px; font-weight: bold;
+                font-family: 'Menlo', monospace;
+            }}
+            QComboBox::drop-down {{ border: none; }}
+        """)
+        self.platform_combo.currentTextChanged.connect(lambda _: self._refresh())
+        plat_row.addWidget(self.platform_combo, 1)
+        layout.addLayout(plat_row)
+
+        # Stats rows
+        row_style = f"color:{C_CREAM_DIM}; font-size:8px; font-family:'Menlo',monospace; " \
+                    f"border:none; background:transparent;"
+        val_style = f"font-size:9px; font-weight:bold; font-family:'Menlo',monospace; " \
+                    f"border:none; background:transparent;"
+
+        def stat_row(label_text):
+            row = QHBoxLayout()
+            row.setSpacing(2)
+            lbl = QLabel(label_text)
+            lbl.setStyleSheet(row_style)
+            lbl.setFixedWidth(100)
+            row.addWidget(lbl)
+            val = QLabel("—")
+            val.setStyleSheet(val_style + f"color:{C_TEAL_GLOW};")
+            val.setAlignment(Qt.AlignmentFlag.AlignRight)
+            row.addWidget(val)
+            layout.addLayout(row)
+            return val
+
+        self.val_your_lufs = stat_row("Your LUFS:")
+        self.val_target = stat_row("Target:")
+        self.val_penalty = stat_row("Penalty:")
+        self.val_tp = stat_row("True Peak:")
+        self.val_lra = stat_row("LRA:")
+        self.val_crest = stat_row("Crest Factor:")
+
+        # Status bar
+        self.status_label = QLabel("⏸ ยังไม่มีข้อมูล")
+        self.status_label.setStyleSheet(
+            f"color:#6B6B70; font-size:8px; font-style:italic; "
+            f"border:none; background:transparent; padding-top:2px;")
+        self.status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.status_label.setWordWrap(True)
+        layout.addWidget(self.status_label)
+
+        # State
+        self._lufs_int = -70.0
+        self._tp_left = -70.0
+        self._tp_right = -70.0
+        self._lra = 0.0
+        self._lufs_mom = -70.0
+
+    def update_stats(self, lufs_integrated=-70.0, tp_left=-70.0, tp_right=-70.0,
+                     lra=0.0, lufs_momentary=-70.0):
+        """Feed loudness data — called from meter update loop."""
+        self._lufs_int = lufs_integrated
+        self._tp_left = tp_left
+        self._tp_right = tp_right
+        self._lra = lra
+        self._lufs_mom = lufs_momentary
+        self._refresh()
+
+    def _refresh(self):
+        platform = self.platform_combo.currentText()
+        target = self.PLATFORMS.get(platform, {"lufs": -14.0, "tp": -1.0})
+        target_lufs = target["lufs"]
+        target_tp = target["tp"]
+        tp_max = max(self._tp_left, self._tp_right)
+
+        # Your LUFS
+        if self._lufs_int > -60:
+            self.val_your_lufs.setText(f"{self._lufs_int:.1f} LUFS")
+            self.val_your_lufs.setStyleSheet(
+                f"color:{C_TEAL_GLOW}; font-size:9px; font-weight:bold; "
+                f"font-family:'Menlo',monospace; border:none; background:transparent;")
+        else:
+            self.val_your_lufs.setText("—")
+
+        # Target
+        self.val_target.setText(f"{target_lufs:.1f} LUFS")
+
+        # Penalty
+        if self._lufs_int > -60:
+            penalty = target_lufs - self._lufs_int
+            if penalty >= 0:
+                penalty_text = f"0.0 dB ✓"
+                penalty_color = C_LED_GREEN
+                status = f"🟢 ดีเยี่ยม! {platform} จะไม่กดเสียงลง"
+            elif penalty > -3:
+                penalty_text = f"{penalty:+.1f} dB"
+                penalty_color = C_LED_YELLOW
+                status = f"🟡 ดังไปนิด — {platform} จะกดลง {abs(penalty):.1f} dB"
+            else:
+                penalty_text = f"{penalty:+.1f} dB"
+                penalty_color = C_LED_RED
+                status = f"🔴 ดังเกิน! {platform} จะกดลง {abs(penalty):.1f} dB\nลอง Gain ลง หรือเปลี่ยน IRC mode"
+
+            self.val_penalty.setText(penalty_text)
+            self.val_penalty.setStyleSheet(
+                f"color:{penalty_color}; font-size:10px; font-weight:bold; "
+                f"font-family:'Menlo',monospace; border:none; background:transparent;")
+            self.status_label.setText(status)
+        else:
+            self.val_penalty.setText("—")
+            self.status_label.setText("⏸ กด Play เพื่อดูข้อมูล")
+
+        # True Peak
+        if tp_max > -60:
+            tp_ok = tp_max <= target_tp
+            tp_color = C_LED_GREEN if tp_ok else C_LED_RED
+            self.val_tp.setText(f"{tp_max:.1f} dBTP {'✓' if tp_ok else '⚠'}")
+            self.val_tp.setStyleSheet(
+                f"color:{tp_color}; font-size:9px; font-weight:bold; "
+                f"font-family:'Menlo',monospace; border:none; background:transparent;")
+        else:
+            self.val_tp.setText("—")
+
+        # LRA
+        if self._lra > 0:
+            self.val_lra.setText(f"{self._lra:.1f} LU")
+        else:
+            self.val_lra.setText("—")
+
+        # Crest Factor
+        if self._lufs_int > -60 and tp_max > -60:
+            crest = tp_max - self._lufs_int
+            self.val_crest.setText(f"{crest:.1f} dB")
+        else:
+            self.val_crest.setText("—")
+
+
+# ══════════════════════════════════════════════════
 #  VU-Style Meters Panel (Right Side)
 # ══════════════════════════════════════════════════
 class MetersPanel(QFrame):
@@ -3248,6 +3440,10 @@ class MetersPanel(QFrame):
         # ── V5.6: WAVES WLM-STYLE LOUDNESS METER ──
         self.live_wlm_meter = WavesWLMMeter(target_lufs=-14.0)
         layout.addWidget(self.live_wlm_meter, alignment=Qt.AlignmentFlag.AlignCenter)
+
+        # ── V5.11.0: STATS FOR NERDS (YouTube-style loudness penalty info) ──
+        self.stats_nerd = StatsForNerdsWidget()
+        layout.addWidget(self.stats_nerd, alignment=Qt.AlignmentFlag.AlignCenter)
 
         # Backward-compat references
         self.live_tp = None       # Now inside WLM meter
@@ -7464,6 +7660,13 @@ class MasterPanel(QWidget):
                             tp_right=rt_entry["right_peak_db"],
                         )
 
+                    # V5.11.0: Feed Stats for Nerds from RT path
+                    if hasattr(self, 'meters') and hasattr(self.meters, 'stats_nerd'):
+                        self.meters.stats_nerd.update_stats(
+                            lufs_integrated=lufs_int, tp_left=rt_entry["left_peak_db"],
+                            tp_right=rt_entry["right_peak_db"], lra=lu_range,
+                            lufs_momentary=lufs_mom)
+
                     # V5.10.6: Feed spectrum analyzers from loaded audio during RT playback
                     self._feed_spectrum_from_rt_playback()
 
@@ -7536,6 +7739,12 @@ class MasterPanel(QWidget):
                 integrated=lufs_int, lra=lra,
                 tp_left=l_peak, tp_right=r_peak,
             )
+
+        # V5.11.0: Feed Stats for Nerds
+        if hasattr(self, 'meters') and hasattr(self.meters, 'stats_nerd'):
+            self.meters.stats_nerd.update_stats(
+                lufs_integrated=lufs_int, tp_left=l_peak, tp_right=r_peak,
+                lra=lra, lufs_momentary=lufs_mom)
 
         # True Peak indicator color
         if hasattr(self, 'max_meter_db'):
