@@ -27,7 +27,6 @@ import numpy as np
 from typing import Optional, Dict, List, Callable, Tuple
 
 # Original module imports (unchanged)
-from .resonance_suppressor import ResonanceSuppressor
 from .equalizer import Equalizer
 from .dynamics import Dynamics
 from .imager import Imager
@@ -36,7 +35,6 @@ from .loudness import LoudnessMeter, LoudnessAnalysis
 from .ai_assist import AIAssist, MasterRecommendation
 from .genre_profiles import PLATFORM_TARGETS, IRC_MODES, get_irc_mode
 from .limiter import LookAheadLimiter, LookAheadLimiterFast
-from .soothe import SootheProcessor
 
 # ─── Audio processing dependencies ───
 try:
@@ -656,61 +654,38 @@ class _RealAudioProcessor:
 
     @staticmethod
     def _true_peak_limit(data, sr, ceiling_db):
-        """True Peak Limiter (ITU-R BS.1770-4) with 4x oversampling ISP.
-
-        Vectorized: upsample 4x → compute gain where peaks exceed ceiling →
-        smooth with minimum_filter1d (look-ahead) → apply → downsample → clip.
-        """
+        """True peak limiting using chunk-based 4x oversampling."""
         try:
-            from scipy.ndimage import minimum_filter1d
-
             ceiling_linear = 10 ** (ceiling_db / 20.0)
-            result = data.copy().astype(np.float64)
+            result = data.copy()
             chunk_size = sr
 
             for ch in range(data.shape[1] if data.ndim > 1 else 1):
-                signal = data[:, ch].astype(np.float64) if data.ndim > 1 else data.astype(np.float64)
-
+                signal = data[:, ch] if data.ndim > 1 else data
+                max_tp = 0.0
                 for start in range(0, len(signal), chunk_size):
                     end = min(start + chunk_size, len(signal))
                     chunk = signal[start:end]
-                    if len(chunk) < 8:
+                    if len(chunk) < 4:
                         continue
+                    oversampled = resample_poly(chunk, 4, 1)
+                    chunk_tp = np.max(np.abs(oversampled))
+                    max_tp = max(max_tp, chunk_tp)
 
-                    # 4x upsample
-                    x_4x = resample_poly(chunk, 4, 1)
-                    peaks = np.abs(x_4x)
-
-                    # Where peaks exceed ceiling, compute gain reduction
-                    over = peaks > ceiling_linear
-                    if not np.any(over):
-                        continue  # No peaks exceed ceiling — skip
-
-                    gain_4x = np.ones_like(x_4x)
-                    gain_4x[over] = ceiling_linear / peaks[over]
-
-                    # Smooth gain with look-ahead (1ms at 4x rate)
-                    la = max(4, int(sr * 4 * 0.001))
-                    gain_4x = minimum_filter1d(gain_4x, size=la)
-
-                    # Apply gain at 4x rate
-                    x_4x *= gain_4x
-
-                    # Downsample back
-                    x_limited = resample_poly(x_4x, 1, 4)[:len(chunk)]
-
-                    # Hard clip safety net
-                    x_limited = np.clip(x_limited, -ceiling_linear, ceiling_linear)
-
+                if max_tp > ceiling_linear:
+                    reduction = ceiling_linear / max_tp
                     if data.ndim > 1:
-                        result[start:end, ch] = x_limited
+                        result[:, ch] = signal * reduction
                     else:
-                        result[start:end] = x_limited
+                        result = signal * reduction
 
-            return result.astype(np.float32)
+            return result
         except Exception:
             ceiling_linear = 10 ** (ceiling_db / 20.0)
-            return np.clip(data, -ceiling_linear, ceiling_linear)
+            peak = np.max(np.abs(data))
+            if peak > ceiling_linear:
+                return data * (ceiling_linear / peak)
+            return data
 
     # ─── Final True Peak Limiter ───
     @staticmethod
@@ -858,12 +833,10 @@ class MasterChain:
         self.output_path = None
         self.preview_path = None
 
-        # Modules (signal flow order) — ResSup → EQ → DYN → IMG → Soothe → MAX
-        self.resonance_suppressor = ResonanceSuppressor()
+        # Modules (signal flow order) — SAME as original
         self.equalizer = Equalizer()
         self.dynamics = Dynamics()
         self.imager = Imager()
-        self.soothe = SootheProcessor()
         self.maximizer = Maximizer()
 
         # Loudness tools
@@ -889,30 +862,15 @@ class MasterChain:
         self._progress_callback = None
         self._meter_lock = threading.Lock()
 
-        # V5.10.5: Per-stage meter data for popup panels
-        self.stage_meter_data = {}
-
-        # V5.11.0: Try Rust backend FIRST (10-100x faster DSP)
-        self._rust_chain = None
-        self._use_rust = False
-        try:
-            import longplay
-            self._rust_chain = longplay.PyMasterChain()
-            self._use_rust = True
-            print("[CHAIN] 🦀 Rust Audio Backend ACTIVE (longplay-dsp via PyO3)")
-        except Exception as e:
-            print(f"[CHAIN] Rust backend not available: {e}")
-
-        # Check Python fallback capabilities
+        # Check capabilities
         self._use_real_processing = HAS_SOUNDFILE and (HAS_PEDALBOARD or HAS_SCIPY)
-        if self._use_rust:
-            print("[CHAIN] ✓ Primary: Rust | Fallback: Python "
-                  f"(scipy={HAS_SCIPY}, pyloudnorm={HAS_PYLOUDNORM})")
-        elif self._use_real_processing:
-            print("[CHAIN] ✓ Python Audio Processing enabled "
-                  f"(pedalboard={HAS_PEDALBOARD}, scipy={HAS_SCIPY})")
+        if self._use_real_processing:
+            print("[CHAIN] ✓ Real Audio Processing enabled "
+                  f"(pedalboard={HAS_PEDALBOARD}, scipy={HAS_SCIPY}, "
+                  f"pyloudnorm={HAS_PYLOUDNORM})")
         else:
-            print("[CHAIN] ⚠ Falling back to FFmpeg processing")
+            print("[CHAIN] ⚠ Falling back to FFmpeg processing "
+                  f"(soundfile={HAS_SOUNDFILE}, pedalboard={HAS_PEDALBOARD})")
 
     def set_meter_callback(self, callback):
         """Set real-time meter callback for GUI."""
@@ -1075,14 +1033,6 @@ class MasterChain:
         # V5.8: Send pre-chain meter data (input signal BEFORE any processing)
         self._send_meter(result, sr, "pre_chain")
 
-        # Step 0.5: Resonance Suppressor (before EQ — clean harsh resonances first)
-        if callback:
-            callback(7, "Suppressing resonances...")
-        if self.resonance_suppressor.enabled:
-            result = self.resonance_suppressor.process(result.astype(np.float32)).astype(np.float64)
-            result = np.nan_to_num(result, nan=0.0, posinf=0.99, neginf=-0.99)
-        self._send_meter(result, sr, "post_resonance")
-
         # Step 1: EQ
         if callback:
             callback(10, "Applying EQ...")
@@ -1103,14 +1053,6 @@ class MasterChain:
         result = _RealAudioProcessor.process_imager(result, sr, self.imager, intensity)
         result = np.nan_to_num(result, nan=0.0, posinf=0.99, neginf=-0.99)
         self._send_meter(result, sr, "post_imager")
-
-        # Step 3.5: Soothe (Dynamic Resonance Suppression)
-        if self.soothe.enabled and self.soothe.amount > 0:
-            if callback:
-                callback(48, "Applying Soothe (Resonance Suppression)...")
-            result = self.soothe.process(result)
-            result = np.nan_to_num(result, nan=0.0, posinf=0.99, neginf=-0.99)
-            self._send_meter(result, sr, "post_soothe")
 
         # Step 4: Maximizer (THE KEY MODULE — loudness push!)
         if callback:
@@ -1181,124 +1123,52 @@ class MasterChain:
                 else:
                     levels["gain_reduction_db"] = 0.0
 
-                # V5.10.5: Stereo correlation & width for Imager popup panel
-                if chunk.ndim > 1 and chunk.shape[1] >= 2:
-                    L = chunk[:, 0]
-                    R = chunk[:, 1]
-                    denom = np.sqrt(np.sum(L ** 2) * np.sum(R ** 2))
-                    levels["correlation"] = float(np.sum(L * R) / (denom + 1e-10))
-                    mid_e = np.sum((L + R) ** 2)
-                    side_e = np.sum((L - R) ** 2)
-                    levels["stereo_width"] = float(side_e / (mid_e + 1e-10))
-                else:
-                    levels["correlation"] = 1.0
-                    levels["stereo_width"] = 0.0
-
                 # V5.5: LUFS measurement with correct key names
-                # V5.10 FIX: Integrated uses FULL audio, LRA computed properly
                 if HAS_PYLOUDNORM:
                     try:
-                        meter = pyln.Meter(sr)
-
-                        def _ensure_stereo(buf):
-                            if buf.ndim == 1:
-                                return np.column_stack([buf, buf])
-                            return buf
-
-                        def _safe_lufs(buf):
-                            val = meter.integrated_loudness(buf)
-                            if val == float('-inf') or val < -70:
-                                return -70.0
-                            return val
-
                         # Momentary LUFS (last 400ms)
                         mom_samples = min(len(data), int(sr * 0.4))
                         if mom_samples > 1024:
-                            lufs_mom = _safe_lufs(_ensure_stereo(data[-mom_samples:]))
+                            mom_buf = data[-mom_samples:]
+                            if mom_buf.ndim == 1:
+                                mom_buf = np.column_stack([mom_buf, mom_buf])
+                            meter = pyln.Meter(sr)
+                            lufs_mom = meter.integrated_loudness(mom_buf)
+                            if lufs_mom == float('-inf') or lufs_mom < -70:
+                                lufs_mom = -70.0
                             levels["lufs_momentary"] = lufs_mom
 
                         # Short-term LUFS (last 3 seconds)
                         short_samples = min(len(data), int(sr * 3.0))
                         if short_samples > sr:
-                            lufs_short = _safe_lufs(_ensure_stereo(data[-short_samples:]))
+                            short_buf = data[-short_samples:]
+                            if short_buf.ndim == 1:
+                                short_buf = np.column_stack([short_buf, short_buf])
+                            meter = pyln.Meter(sr)
+                            lufs_short = meter.integrated_loudness(short_buf)
+                            if lufs_short == float('-inf') or lufs_short < -70:
+                                lufs_short = -70.0
                             levels["lufs_short_term"] = lufs_short
 
-                        # Integrated LUFS — FULL audio (not just last 10s)
-                        if len(data) > sr:
-                            full_stereo = _ensure_stereo(data)
-                            lufs_int = _safe_lufs(full_stereo)
+                        # Integrated LUFS (full processed audio so far)
+                        int_samples = min(len(data), sr * 10)
+                        if int_samples > sr:
+                            int_buf = data[-int_samples:]
+                            if int_buf.ndim == 1:
+                                int_buf = np.column_stack([int_buf, int_buf])
+                            meter = pyln.Meter(sr)
+                            lufs_int = meter.integrated_loudness(int_buf)
+                            if lufs_int == float('-inf') or lufs_int < -70:
+                                lufs_int = -70.0
                             levels["lufs_integrated"] = lufs_int
                             levels["lufs"] = lufs_int  # backward compat
-
-                        # V5.10: Loudness Range (LRA) — ITU-R BS.1770-4
-                        # Divide into 3s blocks stepping every 1s, compute per-block LUFS,
-                        # apply absolute + relative gates, LRA = P95 - P10
-                        block_len = int(sr * 3.0)
-                        step_len = int(sr * 1.0)
-                        if len(data) >= block_len:
-                            full_stereo = _ensure_stereo(data)
-                            st_values = []
-                            for start in range(0, len(full_stereo) - block_len + 1, step_len):
-                                blk = full_stereo[start:start + block_len]
-                                val = meter.integrated_loudness(blk)
-                                if val != float('-inf') and val > -70:
-                                    st_values.append(val)
-                            if len(st_values) >= 2:
-                                # Absolute gate: discard blocks < -70 LUFS (already done above)
-                                # Relative gate: mean of ungated, then discard < mean - 20 LU
-                                ungated_mean = np.mean(st_values)
-                                gated = [v for v in st_values if v >= ungated_mean - 20.0]
-                                if len(gated) >= 2:
-                                    gated_sorted = sorted(gated)
-                                    p10 = np.percentile(gated_sorted, 10)
-                                    p95 = np.percentile(gated_sorted, 95)
-                                    levels["lu_range"] = max(0.0, p95 - p10)
-                                else:
-                                    levels["lu_range"] = 0.0
-                            else:
-                                levels["lu_range"] = 0.0
                     except Exception:
                         levels["lufs_momentary"] = -70.0
                         levels["lufs_short_term"] = -70.0
                         levels["lufs_integrated"] = -70.0
                         levels["lufs"] = -70.0
-                        levels["lu_range"] = 0.0
 
-                # V5.10.5: Per-band gain reduction for compressor popup panel
-                if stage == "post_dynamics" and chunk.ndim > 1:
-                    try:
-                        mono = np.mean(chunk, axis=1)
-                        n_fft = min(len(mono), 4096)
-                        spectrum = np.abs(np.fft.rfft(mono[:n_fft])) ** 2
-                        freqs = np.fft.rfftfreq(n_fft, 1.0 / sr)
-                        xlo = getattr(self.dynamics, 'crossover_low', 200)
-                        xhi = getattr(self.dynamics, 'crossover_high', 4000)
-                        low_m = freqs < xlo
-                        mid_m = (freqs >= xlo) & (freqs < xhi)
-                        hi_m = freqs >= xhi
-                        eps = 1e-20
-                        thr = getattr(self.dynamics.single_band, 'threshold', -16.0)
-                        for mask, key in [(low_m, 'band_gr_low'), (mid_m, 'band_gr_mid'), (hi_m, 'band_gr_high')]:
-                            band_db = 10 * np.log10(np.mean(spectrum[mask]) + eps)
-                            levels[key] = min(0.0, thr - band_db) if band_db > thr else 0.0
-                        # Store to dynamics for external access
-                        self.dynamics.last_band_gr = {
-                            "low": levels['band_gr_low'],
-                            "mid": levels['band_gr_mid'],
-                            "high": levels['band_gr_high'],
-                        }
-                    except Exception:
-                        levels['band_gr_low'] = 0.0
-                        levels['band_gr_mid'] = 0.0
-                        levels['band_gr_high'] = 0.0
-
-                # V5.10.5: Include raw audio chunk for spectrum display
-                levels["_spectrum_chunk"] = chunk.copy()
-                levels["_spectrum_sr"] = sr
-
-                # V5.10.5: Store per-stage data for popup panels
                 with self._meter_lock:
-                    self.stage_meter_data[stage] = levels
                     self._meter_callback(levels)
             except Exception as e:
                 print(f"[METER] ❌ _send_meter ERROR: {e}")
@@ -1435,10 +1305,7 @@ class MasterChain:
             if callback:
                 callback(0, "Starting mastering...")
 
-            # V5.11.0: Try Rust backend first (10-100x faster)
-            if self._use_rust and self._rust_chain is not None:
-                return self._render_rust(out_path, callback)
-            elif self._use_real_processing:
+            if self._use_real_processing:
                 return self._render_real(out_path, callback)
             else:
                 if self.normalize_loudness:
@@ -1457,98 +1324,8 @@ class MasterChain:
             with self._processing_lock:
                 self.is_processing = False
 
-    def _render_rust(self, output_path, callback):
-        """V5.11.0: Full render using Rust DSP backend (PyMasterChain)."""
-        import time
-        t0 = time.perf_counter()
-
-        if callback:
-            callback(5, "🦀 Loading audio (Rust)...")
-
-        try:
-            self._rust_chain.load_audio(self.input_path)
-
-            # Sync Python module settings → Rust chain
-            self._sync_params_to_rust()
-
-            if callback:
-                callback(20, "🦀 Processing audio (Rust DSP)...")
-
-            result = self._rust_chain.render(output_path)
-
-            elapsed = time.perf_counter() - t0
-            print(f"[CHAIN] 🦀 Rust render complete: {elapsed:.2f}s → {output_path}")
-
-            if callback:
-                callback(90, "Finalizing...")
-
-            # Send meter data for spectrum
-            if os.path.exists(output_path) and self._meter_callback:
-                try:
-                    data, sr = sf.read(output_path)
-                    if data.ndim == 1:
-                        data = np.column_stack([data, data])
-                    self._send_meter(data, sr, "final")
-                except Exception:
-                    pass
-
-            if callback:
-                callback(100, "✓ Mastering complete (Rust)")
-
-            return output_path
-
-        except Exception as e:
-            print(f"[CHAIN] 🦀 Rust render failed: {e}, falling back to Python")
-            if callback:
-                callback(10, "Rust failed, using Python fallback...")
-            return self._render_real(output_path, callback)
-
-    def _sync_params_to_rust(self):
-        """Sync all Python module parameters to Rust PyMasterChain."""
-        rc = self._rust_chain
-        if not rc:
-            return
-
-        try:
-            # Maximizer
-            rc.maximizer_set_gain(self.maximizer.gain)
-            rc.maximizer_set_ceiling(getattr(self.maximizer, 'ceiling', -1.0))
-            rc.maximizer_set_character(getattr(self.maximizer, 'character', 3.0))
-            irc = getattr(self.maximizer, 'irc_mode_name', 'IRC 4 - Modern')
-            rc.maximizer_set_irc_mode(irc)
-
-            # Dynamics
-            sb = self.dynamics.single_band
-            rc.dynamics_set_threshold(sb.threshold)
-            rc.dynamics_set_ratio(sb.ratio)
-            rc.dynamics_set_attack(sb.attack)
-            rc.dynamics_set_release(sb.release)
-            rc.dynamics_set_makeup_gain(sb.makeup)
-
-            # EQ — sync band settings
-            if hasattr(self.equalizer, 'bands'):
-                for i, band in enumerate(self.equalizer.bands[:8]):
-                    try:
-                        rc.eq_set_band(i, band.freq, band.gain, band.q)
-                        rc.eq_set_band_enabled(i, band.enabled)
-                    except Exception:
-                        pass
-
-            # Imager
-            rc.imager_set_width(self.imager.width)
-            if hasattr(self.imager, 'balance'):
-                rc.imager_set_balance(self.imager.balance)
-
-            # Target levels
-            rc.set_target_lufs(self.target_lufs)
-            rc.set_target_tp(self.target_tp)
-            rc.set_intensity(self.intensity)
-
-        except Exception as e:
-            print(f"[CHAIN] ⚠ Param sync error: {e}")
-
     def _render_real(self, output_path, callback):
-        """Full render using real audio processing (Python fallback)."""
+        """Full render using real audio processing."""
         if callback:
             callback(5, "Loading audio...")
 
@@ -1744,7 +1521,7 @@ class MasterChain:
     def save_settings(self, filepath: str):
         """Save all module settings to JSON file."""
         data = {
-            "version": "5.10",
+            "version": "5.9",
             "chain": {
                 "intensity": self.intensity,
                 "target_lufs": self.target_lufs,
@@ -1752,7 +1529,6 @@ class MasterChain:
                 "normalize_loudness": self.normalize_loudness,
                 "platform": self.platform,
             },
-            "resonance_suppressor": self.resonance_suppressor.get_settings_dict(),
             "equalizer": self.equalizer.get_settings_dict(),
             "dynamics": self.dynamics.get_settings_dict(),
             "imager": self.imager.get_settings_dict(),
@@ -1778,8 +1554,6 @@ class MasterChain:
             self.platform = chain_data.get("platform", "YouTube")
             if "equalizer" in data:
                 self.equalizer.load_settings_dict(data["equalizer"])
-            if "resonance_suppressor" in data:
-                self.resonance_suppressor.load_settings_dict(data["resonance_suppressor"])
             if "dynamics" in data:
                 self.dynamics.load_settings_dict(data["dynamics"])
             if "imager" in data:
@@ -1794,7 +1568,6 @@ class MasterChain:
 
     def reset_all(self):
         """Reset all modules to default settings."""
-        self.resonance_suppressor = ResonanceSuppressor()
         self.equalizer = Equalizer()
         self.dynamics = Dynamics()
         self.imager = Imager()

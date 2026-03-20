@@ -1,0 +1,23 @@
+[package]
+name = "longplay-python"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+name = "longplay"
+crate-type = ["cdylib"]
+
+[dependencies]
+longplay-core = { workspace = true }
+longplay-chain = { workspace = true }
+longplay-dsp = { workspace = true }
+longplay-analysis = { workspace = true }
+longplay-profiles = { workspace = true }
+longplay-ai = { workspace = true }
+longplay-io = { workspace = true }
+longplay-aidj = { workspace = true }
+longplay-hooks = { workspace = true }
+longplay-rt = { workspace = true }
+serde_json = { workspace = true }
+pyo3 = { workspace = true }
+rayon = { workspace = true }

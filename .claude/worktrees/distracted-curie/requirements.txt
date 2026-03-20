@@ -1,0 +1,49 @@
+# MRG One-Click Production System — Dependencies
+# Install all: pip3 install -r requirements.txt
+# Install minimal: pip3 install -r requirements.txt (core only, see optional below)
+
+# ═══ Core (required) ═══
+pyyaml>=6.0
+aiohttp>=3.9.0
+httpx>=0.25.0
+
+# ═══ AI Providers ═══
+anthropic>=0.25.0
+openai>=1.12.0
+
+# ═══ Image/Thumbnail Generation ═══
+Pillow>=10.0.0
+
+# ═══ Audio Processing & Mastering ═══
+pydub>=0.25.0
+soundfile>=0.12.0
+scipy>=1.10.0
+pyloudnorm>=0.1.0
+# pedalboard>=0.8.0  # OPTIONAL — GPL-3.0 license, not required (scipy fallback used)
+
+# ═══ Video Assembly ═══
+moviepy>=1.0.3
+opencv-python>=4.8.0
+numpy>=1.24.0
+
+# ═══ YouTube Upload (OAuth2) ═══
+google-auth>=2.0.0
+google-auth-oauthlib>=1.0.0
+google-api-python-client>=2.0.0
+
+# ═══ GUI ═══
+PySide6>=6.6.0
+# PyQt6>=6.6.0  # ALTERNATIVE — GPL-3.0 unless commercial license purchased
+# PySide6 is LGPL-2.1 — free for commercial use without open-sourcing
+
+# ═══ Audio Analysis — AI DJ (optional) ═══
+# librosa>=0.10.0
+
+# ═══ Development ═══
+# pytest>=8.0
+# pytest-asyncio>=0.23.0
+
+# System Requirements (not pip-installable):
+# - FFmpeg (brew install ffmpeg / apt install ffmpeg)
+# - FFprobe (included with FFmpeg)
+# - Python 3.10+ (tested on 3.12, 3.14)

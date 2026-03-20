@@ -1,0 +1,44 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/longplay-core",
+    "crates/longplay-io",
+    "crates/longplay-dsp",
+    "crates/longplay-analysis",
+    "crates/longplay-profiles",
+    "crates/longplay-ai",
+    "crates/longplay-chain",
+    "crates/longplay-cli",
+    "crates/longplay-python",
+    "crates/longplay-aidj",
+    "crates/longplay-hooks",
+    "crates/longplay-rt",
+]
+
+[workspace.package]
+version = "5.9.0"
+edition = "2021"
+authors = ["MRG LongPlay Studio"]
+license = "MIT"
+
+[workspace.dependencies]
+longplay-core = { path = "crates/longplay-core" }
+longplay-io = { path = "crates/longplay-io" }
+longplay-dsp = { path = "crates/longplay-dsp" }
+longplay-analysis = { path = "crates/longplay-analysis" }
+longplay-profiles = { path = "crates/longplay-profiles" }
+longplay-ai = { path = "crates/longplay-ai" }
+longplay-chain = { path = "crates/longplay-chain" }
+longplay-aidj = { path = "crates/longplay-aidj" }
+longplay-hooks = { path = "crates/longplay-hooks" }
+longplay-rt = { path = "crates/longplay-rt" }
+
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+hound = "3.5"
+thiserror = "2"
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+regex = "1"
+pyo3 = { version = "0.28", features = ["extension-module"] }
+rayon = "1.10"

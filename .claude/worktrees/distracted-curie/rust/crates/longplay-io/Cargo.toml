@@ -1,0 +1,11 @@
+[package]
+name = "longplay-io"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+longplay-core = { workspace = true }
+hound = { workspace = true }
+thiserror = { workspace = true }
+serde_json = { workspace = true }
+symphonia = { version = "0.5", features = ["mp3", "flac", "ogg", "pcm", "aac"] }

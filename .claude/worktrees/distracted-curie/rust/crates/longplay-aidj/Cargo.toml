@@ -1,0 +1,15 @@
+[package]
+name = "longplay-aidj"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+longplay-core = { workspace = true }
+longplay-io = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+regex = { workspace = true }
+ndarray = "0.16"
+rustfft = "6"
+rand = "0.8"
+tempfile = "3"

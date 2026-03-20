@@ -1,0 +1,13 @@
+[build-system]
+requires = ["maturin>=1.0"]
+build-backend = "maturin"
+
+[project]
+name = "longplay"
+version = "5.9.0"
+description = "LongPlay Studio V5.9 - Rust audio engine with PyO3 bindings"
+requires-python = ">=3.9"
+
+[tool.maturin]
+features = ["pyo3/extension-module"]
+manifest-path = "crates/longplay-python/Cargo.toml"

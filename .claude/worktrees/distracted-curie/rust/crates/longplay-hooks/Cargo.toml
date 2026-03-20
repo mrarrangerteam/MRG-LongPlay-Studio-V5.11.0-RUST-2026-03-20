@@ -1,0 +1,10 @@
+[package]
+name = "longplay-hooks"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+longplay-core = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+ndarray = "0.16"

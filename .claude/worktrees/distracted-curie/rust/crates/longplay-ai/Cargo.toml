@@ -1,0 +1,9 @@
+[package]
+name = "longplay-ai"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+longplay-core = { workspace = true }
+longplay-analysis = { workspace = true }
+longplay-profiles = { workspace = true }

@@ -1,0 +1,13 @@
+[package]
+name = "longplay-rt"
+version.workspace = true
+edition.workspace = true
+description = "Real-time audio streaming engine with lock-free parameter control"
+
+[dependencies]
+longplay-core = { workspace = true }
+longplay-dsp = { workspace = true }
+longplay-io = { workspace = true }
+
+cpal = "0.15"
+crossbeam-channel = "0.5"

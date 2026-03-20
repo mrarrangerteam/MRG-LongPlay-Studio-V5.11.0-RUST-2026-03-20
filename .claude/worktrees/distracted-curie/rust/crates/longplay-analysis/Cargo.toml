@@ -1,0 +1,9 @@
+[package]
+name = "longplay-analysis"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+longplay-core = { workspace = true }
+longplay-io = { workspace = true }
+regex = { workspace = true }
