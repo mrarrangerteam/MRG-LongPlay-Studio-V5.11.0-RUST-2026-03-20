@@ -738,7 +738,10 @@ class _RealAudioProcessor:
                 band = np.tanh(band * drive) / np.tanh(np.array([drive]))
 
             # Per-band ceiling (distribute across bands)
-            band_ceiling = ceiling_linear * [0.95, 0.9, 0.85][band_idx]
+            # V5.11.1 FIX: Per-band ceiling must equal the overall ceiling
+            # Old: 0.95/0.9/0.85 caused output to be -2dB instead of -1dB
+            # Bands sum to total, so each band ceiling = overall ceiling
+            band_ceiling = ceiling_linear
 
             # Per-band limiting
             if band.ndim > 1:
