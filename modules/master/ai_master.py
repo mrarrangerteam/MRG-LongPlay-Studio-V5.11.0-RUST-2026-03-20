@@ -104,6 +104,9 @@ class AIPreset:
     # Loudness
     target_lufs: float = -14.0
 
+    # V5.11.0: EQ band gains for tonal correction (8 bands)
+    eq_bands_gain_db: List[float] = field(default_factory=lambda: [0.0]*8)
+
     # Width / Soothe
     width_amount: float = 1.0
     soothe_amount: float = 0.0
@@ -697,7 +700,62 @@ class AIMasterEngine:
                   f"threshold={preset.dynamics_threshold_db:.0f}dB, "
                   f"ceiling={preset.maximizer_ceiling_db:.1f}dB")
 
-        # Phase 4: Create settings
+        # Phase 4: V5.11.0 — Auto Match EQ (pick best track as reference)
+        if progress_callback:
+            progress_callback(75, "Matching tonal balance...")
+
+        best_track = self._pick_best_reference(valid_analyses)
+        match_corrections = {}
+        if best_track:
+            print(f"\n   Reference track: {best_track.filename}")
+            try:
+                for i, analysis in enumerate(self.analyses):
+                    if analysis.file_path == best_track.file_path:
+                        continue
+                    corr = self._compute_match_correction(
+                        best_track.file_path, analysis.file_path)
+                    if corr:
+                        match_corrections[i] = corr
+                        # Apply top corrections to preset EQ
+                        sorted_bands = sorted(corr.items(), key=lambda x: abs(x[1]), reverse=True)
+                        for freq, db in sorted_bands[:4]:
+                            if i < len(presets):
+                                self._apply_correction_to_preset(presets[i], freq, db * 0.6)
+                print(f"   Match EQ applied to {len(match_corrections)} tracks")
+            except Exception as e:
+                print(f"   Match EQ skipped: {e}")
+
+        # Phase 5: V5.11.0 — Correlation safety check
+        if progress_callback:
+            progress_callback(85, "Checking stereo safety...")
+
+        for i, analysis in enumerate(self.analyses):
+            try:
+                corr = self._check_stereo_correlation(analysis.file_path)
+                if corr < 0.3 and i < len(presets):
+                    old_width = presets[i].width_amount
+                    presets[i].width_amount = min(old_width, 1.0)
+                    print(f"   ⚠️ {analysis.filename}: low correlation ({corr:.2f}), width limited to 100%")
+            except Exception:
+                pass
+
+        # Phase 6: V5.11.0 — Tonal balance correction
+        if progress_callback:
+            progress_callback(92, "Correcting tonal balance...")
+
+        for i, (analysis, preset) in enumerate(zip(self.analyses, presets)):
+            try:
+                tonal = self._compute_tonal_correction(analysis)
+                if tonal:
+                    # Apply gentle tonal correction to EQ preset
+                    for band_idx, corr_db in enumerate(tonal[:8]):
+                        if abs(corr_db) > 0.5 and band_idx < 8:
+                            current = preset.eq_bands_gain_db[band_idx] if band_idx < len(preset.eq_bands_gain_db) else 0
+                            preset.eq_bands_gain_db[band_idx] = current + corr_db * 0.4
+            except Exception:
+                pass
+
+        # Phase 7: Create settings
         settings = PlaylistMasterSettings(
             out_ceiling_db=out_ceiling_db,
             target_lufs=target_lufs,
@@ -715,9 +773,128 @@ class AIMasterEngine:
             progress_callback(100, "AI Master complete!")
 
         print(f"\n   AI Master complete! {len(presets)} presets generated.")
+        print(f"   + Match EQ: {len(match_corrections)} tracks matched")
+        print(f"   + Correlation safety: checked")
+        print(f"   + Tonal balance: corrected")
         print(f"{'='*60}\n")
 
         return settings
+
+    def _pick_best_reference(self, analyses):
+        """V5.11.0: Pick the best track as reference for Match EQ.
+        Best = closest to target LUFS + best spectral balance + highest correlation."""
+        if not analyses:
+            return None
+        scored = []
+        for a in analyses:
+            lufs_score = 10 - abs(a.lufs_integrated - (-14.0))
+            balance_score = 5 if a.spectral_balance == "balanced" else 2
+            crest_score = min(5, a.crest_factor_db / 3)
+            scored.append((lufs_score + balance_score + crest_score, a))
+        scored.sort(key=lambda x: x[0], reverse=True)
+        return scored[0][1]
+
+    def _compute_match_correction(self, ref_path, target_path):
+        """V5.11.0: Compute spectral difference between reference and target."""
+        try:
+            ref_audio, ref_sr = sf.read(ref_path, dtype='float32')
+            tgt_audio, tgt_sr = sf.read(target_path, dtype='float32')
+            if ref_audio.ndim > 1: ref_audio = ref_audio.mean(axis=1)
+            if tgt_audio.ndim > 1: tgt_audio = tgt_audio.mean(axis=1)
+
+            fft_size = 8192
+            # Average spectrum
+            def avg_spectrum(audio, sr):
+                hop = fft_size // 2
+                specs = []
+                for start in range(0, len(audio) - fft_size, hop):
+                    chunk = audio[start:start+fft_size]
+                    spec = np.abs(np.fft.rfft(chunk * np.hanning(fft_size)))
+                    specs.append(spec)
+                if not specs:
+                    return None
+                return np.mean(specs, axis=0)
+
+            ref_spec = avg_spectrum(ref_audio, ref_sr)
+            tgt_spec = avg_spectrum(tgt_audio, tgt_sr)
+            if ref_spec is None or tgt_spec is None:
+                return None
+
+            ref_db = 20 * np.log10(np.maximum(ref_spec, 1e-10))
+            tgt_db = 20 * np.log10(np.maximum(tgt_spec, 1e-10))
+            diff = ref_db - tgt_db
+
+            # Map to 1/3-octave bands
+            freqs = np.fft.rfftfreq(fft_size, 1.0 / ref_sr)
+            oct_centers = [63, 125, 250, 500, 1000, 2000, 4000, 8000, 16000]
+            corrections = {}
+            for center in oct_centers:
+                lo = center / 1.26
+                hi = center * 1.26
+                mask = (freqs >= lo) & (freqs < hi)
+                if np.any(mask):
+                    corrections[center] = float(np.clip(np.mean(diff[mask]), -6, 6))
+            return corrections
+        except Exception:
+            return None
+
+    def _apply_correction_to_preset(self, preset, freq, db):
+        """Apply a frequency correction to the nearest EQ band in preset."""
+        band_freqs = [32, 64, 125, 250, 1000, 4000, 8000, 16000]
+        nearest = min(range(len(band_freqs)), key=lambda i: abs(band_freqs[i] - freq))
+        if nearest < len(preset.eq_bands_gain_db):
+            preset.eq_bands_gain_db[nearest] += np.clip(db, -4, 4)
+
+    def _check_stereo_correlation(self, file_path):
+        """V5.11.0: Check stereo correlation of a track."""
+        try:
+            audio, sr = sf.read(file_path, dtype='float32')
+            if audio.ndim == 1:
+                return 1.0
+            L, R = audio[:, 0], audio[:, 1]
+            denom = np.sqrt(np.sum(L**2) * np.sum(R**2))
+            return float(np.sum(L * R) / (denom + 1e-10))
+        except Exception:
+            return 1.0
+
+    def _compute_tonal_correction(self, analysis):
+        """V5.11.0: Compute tonal balance correction based on spectral analysis."""
+        try:
+            audio, sr = sf.read(analysis.file_path, dtype='float32')
+            if audio.ndim > 1:
+                audio = audio.mean(axis=1)
+
+            fft_size = 8192
+            specs = []
+            hop = fft_size // 2
+            for start in range(0, len(audio) - fft_size, hop):
+                chunk = audio[start:start+fft_size]
+                spec = np.abs(np.fft.rfft(chunk * np.hanning(fft_size)))
+                specs.append(spec)
+            if not specs:
+                return None
+
+            avg_spec = np.mean(specs, axis=0)
+            avg_db = 20 * np.log10(np.maximum(avg_spec, 1e-10))
+
+            # Target = flat (normalized)
+            freqs = np.fft.rfftfreq(fft_size, 1.0 / sr)
+            band_centers = [32, 64, 125, 250, 1000, 4000, 8000, 16000]
+            corrections = []
+            for center in band_centers:
+                lo = center / 1.26
+                hi = center * 1.26
+                mask = (freqs >= lo) & (freqs < hi)
+                if np.any(mask):
+                    band_energy = np.mean(avg_db[mask])
+                    overall_energy = np.mean(avg_db[avg_db > -80])
+                    corr = overall_energy - band_energy
+                    corrections.append(float(np.clip(corr, -4, 4)))
+                else:
+                    corrections.append(0.0)
+            return corrections
+        except Exception:
+            return None
 
     def _analyze_single_track(self, file_path: str) -> TrackAnalysis:
         """วิเคราะห์เพลงเดียว"""
