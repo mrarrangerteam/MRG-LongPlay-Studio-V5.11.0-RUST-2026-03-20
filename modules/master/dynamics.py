@@ -12,7 +12,11 @@ Features:
 Uses FFmpeg: acompressor, highpass, lowpass (for band splitting)
 """
 
+import math
 from typing import List, Dict, Optional
+
+import numpy as np
+
 from .genre_profiles import get_genre_profile
 
 
@@ -84,6 +88,97 @@ class CompressorBand:
         # Parallel compression
         self.parallel_mix = 1.0  # 0.0 = all dry, 1.0 = all wet
 
+        # V5.11: Detection mode — how the compressor measures input level
+        # "peak"     : instantaneous sample magnitude
+        # "rms"      : windowed RMS (window length = attack time)
+        # "envelope" : hybrid peak + exponential smoothing (classic default)
+        self.detection_mode = "peak"
+
+        # V5.11: Auto-release (dual-stage program-dependent release)
+        # When enabled, fast release (50 ms) and slow release (500 ms) are
+        # blended based on the crest factor of 50 ms analysis windows.
+        self.auto_release = False
+
+    # ------------------------------------------------------------------
+    # Detection-mode level computation (NumPy-based offline helpers)
+    # ------------------------------------------------------------------
+
+    def detect_level(self, audio: np.ndarray, sr: int) -> np.ndarray:
+        """Compute per-sample detection level according to *self.detection_mode*.
+
+        Args:
+            audio: 1-D mono signal (or single channel).
+            sr: Sample rate in Hz.
+
+        Returns:
+            1-D array of detection levels (linear amplitude, same length as *audio*).
+        """
+        if self.detection_mode == "peak":
+            return np.abs(audio)
+
+        elif self.detection_mode == "rms":
+            # Windowed RMS with window length equal to attack time
+            window_ms = max(1.0, self.attack)
+            win_samples = max(1, int(round(window_ms * sr / 1000.0)))
+            # Cumulative sum trick for efficient moving average of x^2
+            sq = audio.astype(np.float64) ** 2
+            cumsum = np.concatenate([[0.0], np.cumsum(sq)])
+            # Sliding window mean of squared values
+            rms_sq = np.empty_like(sq)
+            for i in range(len(sq)):
+                lo = max(0, i + 1 - win_samples)
+                rms_sq[i] = (cumsum[i + 1] - cumsum[lo]) / (i + 1 - lo)
+            return np.sqrt(np.maximum(rms_sq, 0.0)).astype(audio.dtype)
+
+        else:
+            # "envelope" — hybrid peak + exponential smoothing
+            att_coeff = math.exp(-1.0 / max(1.0, self.attack * sr / 1000.0))
+            rel_coeff = math.exp(-1.0 / max(1.0, self.release * sr / 1000.0))
+            env = np.empty(len(audio), dtype=np.float64)
+            prev = 0.0
+            abs_audio = np.abs(audio)
+            for i in range(len(audio)):
+                inp = float(abs_audio[i])
+                if inp > prev:
+                    prev = att_coeff * prev + (1.0 - att_coeff) * inp
+                else:
+                    prev = rel_coeff * prev + (1.0 - rel_coeff) * inp
+                env[i] = prev
+            return env.astype(audio.dtype)
+
+    def compute_auto_release(self, audio: np.ndarray, sr: int) -> float:
+        """Compute a program-dependent release time using dual-stage crest analysis.
+
+        Analyses the crest factor (peak / RMS) over 50 ms windows.
+        High crest (transient-heavy) → fast release (50 ms).
+        Low crest (sustained/dense) → slow release (500 ms).
+
+        Returns:
+            Blended release time in milliseconds.
+        """
+        fast_release = 50.0   # ms
+        slow_release = 500.0  # ms
+
+        win_samples = max(1, int(round(0.050 * sr)))  # 50 ms window
+        num_windows = max(1, len(audio) // win_samples)
+
+        crest_values: List[float] = []
+        for w in range(num_windows):
+            start = w * win_samples
+            end = start + win_samples
+            block = audio[start:end]
+            peak = float(np.max(np.abs(block))) + 1e-12
+            rms = float(np.sqrt(np.mean(block.astype(np.float64) ** 2))) + 1e-12
+            crest_values.append(peak / rms)
+
+        avg_crest = float(np.mean(crest_values)) if crest_values else 1.0
+
+        # Typical crest factor range: 1.0 (square wave) to ~10+ (very transient)
+        # Map 1-6 range to slow-fast blend (clamped)
+        t = max(0.0, min(1.0, (avg_crest - 1.0) / 5.0))
+        blended = slow_release * (1.0 - t) + fast_release * t
+        return blended
+
     def to_ffmpeg_filter(self, intensity: float = 1.0) -> Optional[str]:
         """Generate FFmpeg acompressor filter string."""
         if not self.enabled:
@@ -137,6 +232,8 @@ class CompressorBand:
             "knee": self.knee,
             "sidechain_hpf": self.sidechain_hpf,
             "parallel_mix": self.parallel_mix,
+            "detection_mode": self.detection_mode,
+            "auto_release": self.auto_release,
         }
 
     @classmethod
@@ -147,7 +244,8 @@ class CompressorBand:
             high_freq=d.get("high_freq", 20000),
         )
         for key in ["enabled", "threshold", "ratio", "attack", "release",
-                     "makeup", "knee", "sidechain_hpf", "parallel_mix"]:
+                     "makeup", "knee", "sidechain_hpf", "parallel_mix",
+                     "detection_mode", "auto_release"]:
             if key in d:
                 setattr(band, key, d[key])
         return band

@@ -13,7 +13,11 @@ Features:
 Uses FFmpeg: stereotools, pan (for M/S encoding), crossover filters
 """
 
+import math
 from typing import List, Optional
+
+import numpy as np
+
 from .genre_profiles import get_genre_profile
 
 
@@ -101,6 +105,10 @@ class Imager:
         self.balance = 0.0          # -1.0 (full left) to +1.0 (full right)
         self.mono_bass_freq = 0     # Hz (0 = disabled, >0 = mono below this freq)
 
+        # Stereoize modes (V5.11 — delay/phase-based stereo decorrelation)
+        self.stereoize_mode = "off"   # "off", "I", "II"
+        self.stereoize_amount = 0     # 0-100
+
         # Multiband mode
         self.crossover_low = 200
         self.crossover_high = 4000
@@ -127,6 +135,115 @@ class Imager:
         """Load stereo width from genre profile."""
         profile = get_genre_profile(genre_name)
         self.width = profile.get("stereo_width", 100)
+
+    # ------------------------------------------------------------------
+    # Stereoize I / II — NumPy-based decorrelation processors
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _allpass_cascade(signal: np.ndarray, coeffs: List[float]) -> np.ndarray:
+        """First-order allpass cascade: y[n] = coeff*x[n] + x[n-1] - coeff*y[n-1]
+        Applies each coefficient sequentially for deeper phase rotation."""
+        out = signal.copy()
+        for c in coeffs:
+            x_prev = 0.0
+            y_prev = 0.0
+            buf = np.empty_like(out)
+            for i in range(len(out)):
+                buf[i] = c * out[i] + x_prev - c * y_prev
+                x_prev = out[i]
+                y_prev = buf[i]
+            out = buf
+        return out
+
+    def stereoize_i(self, audio: np.ndarray, amount: float, sr: int) -> np.ndarray:
+        """Stereoize I — delay-based decorrelation.
+
+        Applies a short delay (0.1 – 5 ms scaled by *amount*) to one channel
+        combined with an allpass filter for frequency-dependent phase shift.
+
+        Args:
+            audio: 2-D NumPy array, shape (num_samples, 2).
+            amount: 0 – 100 (percent).
+            sr: Sample rate in Hz.
+
+        Returns:
+            Processed stereo audio (same shape).
+        """
+        if audio.ndim != 2 or audio.shape[1] != 2:
+            return audio
+        amount = max(0.0, min(100.0, float(amount)))
+        if amount == 0:
+            return audio
+
+        # Delay 0.1 ms – 5 ms mapped from amount 0-100
+        delay_ms = 0.1 + (amount / 100.0) * 4.9
+        delay_samples = int(round(delay_ms * sr / 1000.0))
+
+        out = audio.copy()
+
+        # Delay the right channel
+        if delay_samples > 0:
+            out[delay_samples:, 1] = audio[:-delay_samples, 1]
+            out[:delay_samples, 1] = 0.0
+
+        # Allpass filter on right channel for frequency-dependent phase shift
+        # Coefficient derived from amount (higher amount → more phase rotation)
+        ap_coeff = 0.3 + 0.5 * (amount / 100.0)  # 0.3 – 0.8
+        out[:, 1] = self._allpass_cascade(out[:, 1], [ap_coeff])
+
+        # Wet/dry blend based on amount
+        blend = amount / 100.0
+        result = audio * (1.0 - blend) + out * blend
+        return result
+
+    def stereoize_ii(self, audio: np.ndarray, amount: float, sr: int) -> np.ndarray:
+        """Stereoize II — phase-based decorrelation (complementary allpass networks).
+
+        Uses complementary allpass filter networks on L and R to create
+        approximately 90-degree phase differences at certain frequencies.
+        More mono-compatible than Stereoize I because no delay offset is added.
+
+        Args:
+            audio: 2-D NumPy array, shape (num_samples, 2).
+            amount: 0 – 100 (percent).
+            sr: Sample rate in Hz.
+
+        Returns:
+            Processed stereo audio (same shape).
+        """
+        if audio.ndim != 2 or audio.shape[1] != 2:
+            return audio
+        amount = max(0.0, min(100.0, float(amount)))
+        if amount == 0:
+            return audio
+
+        # Complementary allpass coefficient sets chosen to approximate
+        # a 90-degree phase split (Hilbert-like) at mid-range frequencies.
+        # More coefficients → broader frequency coverage.
+        base = 0.4 + 0.4 * (amount / 100.0)  # 0.4 – 0.8
+        coeffs_l = [base, base * 0.6, base * 0.35]
+        coeffs_r = [-base, -base * 0.6, -base * 0.35]
+
+        out = audio.copy()
+        out[:, 0] = self._allpass_cascade(audio[:, 0], coeffs_l)
+        out[:, 1] = self._allpass_cascade(audio[:, 1], coeffs_r)
+
+        # Wet/dry blend
+        blend = amount / 100.0
+        result = audio * (1.0 - blend) + out * blend
+        return result
+
+    def apply_stereoize(self, audio: np.ndarray, sr: int) -> np.ndarray:
+        """Apply the currently configured stereoize mode to *audio*.
+
+        Called as part of the imager process chain when stereoize is enabled.
+        """
+        if self.stereoize_mode == "I":
+            return self.stereoize_i(audio, self.stereoize_amount, sr)
+        elif self.stereoize_mode == "II":
+            return self.stereoize_ii(audio, self.stereoize_amount, sr)
+        return audio
 
     def _width_to_stereotools_param(self, width_pct: int) -> float:
         """
@@ -249,6 +366,8 @@ class Imager:
             "width": self.width,
             "balance": self.balance,
             "mono_bass_freq": self.mono_bass_freq,
+            "stereoize_mode": self.stereoize_mode,
+            "stereoize_amount": self.stereoize_amount,
             "crossover_low": self.crossover_low,
             "crossover_high": self.crossover_high,
             "bands": [b.to_dict() for b in self.bands],
@@ -256,7 +375,8 @@ class Imager:
 
     def load_settings_dict(self, d: dict):
         for key in ["enabled", "multiband", "preset_name", "width",
-                     "balance", "mono_bass_freq", "crossover_low", "crossover_high"]:
+                     "balance", "mono_bass_freq", "stereoize_mode",
+                     "stereoize_amount", "crossover_low", "crossover_high"]:
             if key in d:
                 setattr(self, key, d[key])
         if "bands" in d:
