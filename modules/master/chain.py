@@ -1280,6 +1280,10 @@ class MasterChain:
                         levels['band_gr_mid'] = 0.0
                         levels['band_gr_high'] = 0.0
 
+                # V5.10.5: Include raw audio chunk for spectrum display
+                levels["_spectrum_chunk"] = chunk.copy()
+                levels["_spectrum_sr"] = sr
+
                 # V5.10.5: Store per-stage data for popup panels
                 with self._meter_lock:
                     self.stage_meter_data[stage] = levels

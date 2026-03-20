@@ -8641,6 +8641,41 @@ class LongPlayStudioV4(QMainWindow):
                         chain = self._get_right_panel_chain()
                         processed = audio.copy()
 
+                        # V5.10.6: Apply FULL chain (EQ → Dynamics → Soothe → Imager → Maximizer)
+                        # Uses _RealAudioProcessor static methods (same as chain.py rendering)
+                        if chain:
+                            # 1. EQ (8-band parametric)
+                            if hasattr(chain, 'equalizer') and getattr(chain.equalizer, 'enabled', True):
+                                try:
+                                    processed = _RealAudioProcessor.process_eq(
+                                        processed, sr, chain.equalizer, 1.0)
+                                except Exception as e:
+                                    print(f"[A/B] EQ: {e}")
+
+                            # 2. Dynamics (Compressor)
+                            if hasattr(chain, 'dynamics') and getattr(chain.dynamics, 'enabled', True):
+                                try:
+                                    processed = _RealAudioProcessor.process_dynamics(
+                                        processed, sr, chain.dynamics, 1.0)
+                                except Exception as e:
+                                    print(f"[A/B] Dynamics: {e}")
+
+                            # 3. Resonance Suppressor (Soothe)
+                            if hasattr(chain, 'resonance_suppressor') and getattr(chain.resonance_suppressor, 'enabled', True):
+                                try:
+                                    processed = chain.resonance_suppressor.process(
+                                        processed.astype(np.float32)).astype(np.float64 if processed.dtype == np.float64 else np.float32)
+                                except Exception as e:
+                                    print(f"[A/B] Soothe: {e}")
+
+                            # 4. Stereo Imager
+                            if hasattr(chain, 'imager') and getattr(chain.imager, 'enabled', True):
+                                try:
+                                    processed = _RealAudioProcessor.process_imager(
+                                        processed, sr, chain.imager, 1.0)
+                                except Exception as e:
+                                    print(f"[A/B] Imager: {e}")
+
                         # Apply gain
                         if gain_db > 0.01:
                             processed = processed * np.float32(10 ** (gain_db / 20.0))
@@ -8656,7 +8691,7 @@ class LongPlayStudioV4(QMainWindow):
                         np.clip(processed, -ceiling_lin, ceiling_lin, out=processed)
 
                         _sf.write(temp_path, processed, sr, subtype='FLOAT')
-                        print(f"[A/B] Mastered rendered: peak={np.max(np.abs(processed)):.4f}")
+                        print(f"[A/B] Mastered rendered (FULL CHAIN): peak={np.max(np.abs(processed)):.4f}")
 
                         # Hot-swap on main thread
                         def _swap():
@@ -8986,11 +9021,181 @@ class LongPlayStudioV4(QMainWindow):
         if mw and not getattr(mw, '_popup_meter_forward', None):
             mw._popup_meter_forward = self._on_forwarded_meter_data
 
+    def _build_meter_levels_fallback(self):
+        """V5.10.5: Build meter levels directly from audio engine when MasterPanel is not open.
+        Uses the same AudioAnalysisEngine that drives the working level meters.
+        """
+        # Need audio engine with loaded audio and active playback
+        if not hasattr(self, 'audio_engine') or self.audio_engine._current_data is None:
+            return None
+        if not hasattr(self, 'audio_player') or not getattr(self.audio_player, 'is_playing', False):
+            return None
+
+        # Get current position
+        try:
+            pos_ms = self.audio_player.player.position()
+        except Exception:
+            return None
+
+        # Analyze at current position (same as level meter)
+        levels = self.audio_engine.analyze_at_position(pos_ms, window_ms=50)
+        if not levels or levels.get('left_peak_db', -70.0) <= -69.0:
+            return None
+
+        # Enrich with chain stage data if available
+        chain = self._get_right_panel_chain()
+        if chain and hasattr(chain, 'stage_meter_data'):
+            levels['_stage_data'] = chain.stage_meter_data.copy()
+
+        # Compute stereo correlation from raw audio
+        try:
+            import numpy as np
+            sr = self.audio_engine._current_sr
+            data = self.audio_engine._current_data
+            center = int(pos_ms / 1000.0 * sr)
+            win = int(0.05 * sr)  # 50ms
+            start = max(0, center - win // 2)
+            end = min(len(data), start + win)
+            chunk = data[start:end]
+            if chunk.ndim > 1 and chunk.shape[1] >= 2:
+                L, R = chunk[:, 0], chunk[:, 1]
+                denom = np.sqrt(np.sum(L**2) * np.sum(R**2))
+                levels['correlation'] = float(np.sum(L * R) / (denom + 1e-10))
+                mid_e = np.sum((L + R)**2)
+                side_e = np.sum((L - R)**2)
+                levels['stereo_width'] = float(side_e / (mid_e + 1e-10))
+            else:
+                levels['correlation'] = 1.0
+                levels['stereo_width'] = 0.0
+        except Exception:
+            levels['correlation'] = 1.0
+            levels['stereo_width'] = 0.0
+
+        # Add gain reduction from chain dynamics
+        if chain and hasattr(chain, 'dynamics'):
+            gr = getattr(chain.dynamics, 'last_band_gr', {})
+            levels['band_gr_low'] = gr.get('low', 0.0)
+            levels['band_gr_mid'] = gr.get('mid', 0.0)
+            levels['band_gr_high'] = gr.get('high', 0.0)
+            levels['gain_reduction_db'] = min(gr.get('low', 0.0), gr.get('mid', 0.0), gr.get('high', 0.0))
+
+        return levels
+
+    def _feed_spectrum_to_panels(self, levels):
+        """V5.10.6: Feed raw audio samples to popup panels for spectrum display.
+
+        Reads audio at current playback position and calls set_audio_data()
+        on each visible panel, enabling Ozone 12-style live FFT spectrum.
+        Works even when audio is NOT playing — reads from loaded file.
+        """
+        if not hasattr(self, '_meter_panels') or not self._meter_panels:
+            return
+
+        # Check if any panel is visible
+        visible_panels = [p for p in self._meter_panels.values() if p and p.isVisible()]
+        if not visible_panels:
+            return
+
+        import numpy as np
+        chunk = None
+        sr = 44100
+
+        # Source 1: Audio chunk from meter data (offline chain path)
+        if levels:
+            chunk = levels.get('_spectrum_chunk')
+            sr = levels.get('_spectrum_sr', 44100)
+
+        # Source 2: Audio engine at current playback position
+        if chunk is None:
+            try:
+                if hasattr(self, 'audio_engine') and self.audio_engine._current_data is not None:
+                    data = self.audio_engine._current_data
+                    ae_sr = self.audio_engine._current_sr
+                    pos_ms = 0
+                    if hasattr(self, 'audio_player') and hasattr(self.audio_player, 'player'):
+                        try:
+                            pos_ms = self.audio_player.player.position()
+                        except Exception:
+                            pass
+                    center = int(pos_ms / 1000.0 * ae_sr)
+                    start = max(0, center - 2048)
+                    end = min(len(data), start + 4096)
+                    if end > start + 100:
+                        chunk = data[start:end]
+                        sr = ae_sr
+            except Exception:
+                pass
+
+        # Source 3: Read directly from audio file loaded in track list or chain
+        if chunk is None:
+            try:
+                import soundfile as sf
+                audio_path = None
+
+                # Try audio_files list (main track list — most reliable)
+                if hasattr(self, 'audio_files') and self.audio_files:
+                    try:
+                        af = self.audio_files[0]
+                        audio_path = getattr(af, 'path', None) or (af if isinstance(af, str) else None)
+                    except Exception:
+                        pass
+
+                # Try MasterPanel chain
+                if not audio_path:
+                    mw = getattr(self, '_master_window', None)
+                    for src in [mw, self]:
+                        if src is None:
+                            continue
+                        ch = getattr(src, 'chain', None) or getattr(src, '_right_chain', None)
+                        if ch and hasattr(ch, 'input_path') and ch.input_path:
+                            audio_path = ch.input_path
+                            break
+
+                # Try _right_chain directly
+                if not audio_path:
+                    ch = getattr(self, '_right_chain', None)
+                    if ch and hasattr(ch, 'input_path') and ch.input_path:
+                        audio_path = ch.input_path
+
+                if audio_path and os.path.exists(audio_path):
+                    info = sf.info(audio_path)
+                    sr = info.samplerate
+                    # Animate: sliding position through the audio
+                    if not hasattr(self, '_spectrum_tick_count'):
+                        self._spectrum_tick_count = 0
+                    self._spectrum_tick_count += 1
+                    # Start at 30s or middle, scroll through
+                    base_pos = min(int(sr * 30), max(0, info.frames // 2))
+                    animated_pos = (base_pos + self._spectrum_tick_count * 2048) % max(1, info.frames - 4096)
+                    end_pos = min(info.frames, animated_pos + 4096)
+                    if end_pos > animated_pos + 100:
+                        chunk, sr = sf.read(audio_path, start=animated_pos, stop=end_pos)
+            except Exception:
+                pass
+
+        if chunk is None:
+            # Debug: print why no chunk was found (temporary)
+            if not hasattr(self, '_spectrum_debug_count'):
+                self._spectrum_debug_count = 0
+            self._spectrum_debug_count += 1
+            if self._spectrum_debug_count <= 3:
+                has_af = hasattr(self, 'audio_files') and bool(self.audio_files)
+                af_path = getattr(self.audio_files[0], 'path', '?') if has_af else 'N/A'
+                print(f"[SPECTRUM] ⚠️ No audio chunk found. audio_files={has_af}, path={af_path}")
+            return
+
+        # Feed to all visible panels
+        for panel in visible_panels:
+            try:
+                panel.set_audio_data(chunk, sr)
+            except Exception as e:
+                print(f"[SPECTRUM] ❌ Feed error: {e}")
+
     def _feed_meter_panels(self):
         """Feed audio meter data to popup panels using SAME source as LUFS meter.
 
         Data comes from MasterPanel._update_realtime_meters() via forwarding hook.
-        This ensures popup panels show the exact same data as the working meters.
+        Falls back to direct audio engine analysis when MasterPanel is not open.
         """
         if not hasattr(self, '_meter_panels') or not self._meter_panels:
             return
@@ -8998,8 +9203,14 @@ class LongPlayStudioV4(QMainWindow):
         # Try to install hook if not yet done
         self._install_meter_forward_hook()
 
-        # Get forwarded data (same source as working LUFS/TP meters)
+        # V5.10.6: Always feed spectrum even without meter data
         levels = getattr(self, '_last_meter_levels', None)
+        if not levels:
+            levels = self._build_meter_levels_fallback()
+
+        # Feed spectrum to panels (works even without levels — reads from file)
+        self._feed_spectrum_to_panels(levels)
+
         if not levels:
             return
 

@@ -4331,6 +4331,13 @@ class MasterPanel(QWidget):
             f"color:{C_LED_RED}; font-family:'Menlo'; font-size:11px; font-weight:bold;")
         layout.addWidget(self.res_reduction_label)
 
+        # V5.10.6: Spectrum Analyzer (Ozone 12 style — live FFT behind controls)
+        from modules.widgets.spectrum_analyzer import SpectrumAnalyzerWidget
+        self.res_spectrum = SpectrumAnalyzerWidget()
+        self.res_spectrum.setFixedHeight(160)
+        self.res_spectrum.setMinimumWidth(380)
+        layout.addWidget(self.res_spectrum)
+
         layout.addStretch()
         return widget
 
@@ -4648,6 +4655,13 @@ class MasterPanel(QWidget):
         self.dyn_curve.ratioChanged.connect(self._on_dyn_curve_ratio_changed)
         layout.addWidget(self.dyn_curve)
 
+        # V5.10.6: Spectrum Analyzer (Ozone 12 style — live FFT)
+        from modules.widgets.spectrum_analyzer import SpectrumAnalyzerWidget
+        self.dyn_spectrum = SpectrumAnalyzerWidget()
+        self.dyn_spectrum.setFixedHeight(140)
+        self.dyn_spectrum.setMinimumWidth(380)
+        layout.addWidget(self.dyn_spectrum)
+
         # Controls: Vintage Rotary Knobs
         ctrl_group = QGroupBox("COMPRESSOR CONTROLS")
         ctrl_layout = QHBoxLayout()
@@ -4945,6 +4959,13 @@ class MasterPanel(QWidget):
         band_group.setLayout(band_layout)
         layout.addWidget(band_group)
 
+        # V5.10.6: Spectrum Analyzer (Ozone 12 style — live FFT)
+        from modules.widgets.spectrum_analyzer import SpectrumAnalyzerWidget
+        self.img_spectrum = SpectrumAnalyzerWidget()
+        self.img_spectrum.setFixedHeight(140)
+        self.img_spectrum.setMinimumWidth(380)
+        layout.addWidget(self.img_spectrum)
+
         # V5.8 A-5: Vectorscope + Stereoize + Correlation
         vis_row = QHBoxLayout()
         vis_row.setSpacing(8)
@@ -5191,6 +5212,13 @@ class MasterPanel(QWidget):
         self.tone_buttons[0].setChecked(True)
         self._update_tone_button_styles()
         layout.addLayout(tone_row)
+
+        # V5.10.6: Spectrum Analyzer (Ozone 12 style — live FFT behind Maximizer)
+        from modules.widgets.spectrum_analyzer import SpectrumAnalyzerWidget
+        self.max_spectrum = SpectrumAnalyzerWidget()
+        self.max_spectrum.setFixedHeight(160)
+        self.max_spectrum.setMinimumWidth(380)
+        layout.addWidget(self.max_spectrum)
 
         # ═══ GAIN REDUCTION — Ozone 12 Style History Widget ═══
         self.max_gr_history = GainReductionHistoryWidget()
@@ -7436,6 +7464,9 @@ class MasterPanel(QWidget):
                             tp_right=rt_entry["right_peak_db"],
                         )
 
+                    # V5.10.6: Feed spectrum analyzers from loaded audio during RT playback
+                    self._feed_spectrum_from_rt_playback()
+
                     # V5.10.5 FIX: Forward RT meter data to popup panels
                     # Without this, popup panels get NO data during RT playback
                     # because _meter_buffer is empty and the method returns early below.
@@ -7536,6 +7567,9 @@ class MasterPanel(QWidget):
         if stage in stage_names and hasattr(self, 'live_stage_label'):
             self.live_stage_label.setText(f"STAGE: {stage_names[stage]}")
 
+        # V5.10.6: Feed spectrum analyzers with audio data from meter buffer
+        self._feed_spectrum_from_meter(latest)
+
         # V5.10.5: Forward meter data to popup panels (gui.py hook)
         # Send latest entry + chain's per-stage data for full coverage
         if hasattr(self, '_popup_meter_forward') and self._popup_meter_forward:
@@ -7547,6 +7581,69 @@ class MasterPanel(QWidget):
                 self._popup_meter_forward(fwd)
             except Exception:
                 pass
+
+    # ═══════════════════════════════════════════
+    #  V5.10.6: Spectrum Analyzer Feed System
+    # ═══════════════════════════════════════════
+
+    def _feed_all_spectrums(self, samples, sr):
+        """Feed audio samples to all spectrum analyzer widgets."""
+        import numpy as np
+        if samples is None or len(samples) == 0:
+            return
+        # Feed all module spectrum widgets
+        for attr in ('res_spectrum', 'eq_spectrum', 'dyn_spectrum',
+                     'img_spectrum', 'max_spectrum'):
+            widget = getattr(self, attr, None)
+            if widget is not None:
+                try:
+                    widget.set_audio_data(samples, sr)
+                except Exception:
+                    pass
+
+    def _feed_spectrum_from_meter(self, meter_data: dict):
+        """Extract audio chunk from meter data and feed to spectrum widgets."""
+        chunk = meter_data.get("_spectrum_chunk")
+        sr = meter_data.get("_spectrum_sr", 44100)
+        if chunk is not None:
+            self._feed_all_spectrums(chunk, sr)
+
+    def _feed_spectrum_from_rt_playback(self):
+        """Read audio samples at current playback position for spectrum display.
+
+        During RT playback, the Rust engine doesn't send raw samples back.
+        Instead we read directly from the loaded audio file at the current position.
+        """
+        import numpy as np
+        try:
+            import soundfile as sf
+        except ImportError:
+            return
+
+        if not hasattr(self, 'chain') or not self.chain.input_path:
+            return
+        if not hasattr(self, '_rt_engine') or self._rt_engine is None:
+            return
+
+        try:
+            pos_sec = self._rt_engine.position()
+            if pos_sec <= 0:
+                return
+
+            info = sf.info(self.chain.input_path)
+            sr = info.samplerate
+            start_sample = max(0, int(pos_sec * sr) - 4096)
+            end_sample = start_sample + 4096
+
+            if end_sample > info.frames:
+                end_sample = info.frames
+                start_sample = max(0, end_sample - 4096)
+
+            data, sr = sf.read(self.chain.input_path,
+                               start=start_sample, stop=end_sample)
+            self._feed_all_spectrums(data, sr)
+        except Exception:
+            pass
 
     def _start_meter_timer(self, stage_text="STAGE: ⏳ RENDERING..."):
         """Start the meter update timer (for rendering or playback metering)."""

@@ -107,9 +107,16 @@ class OzoneColors:
 
 class BaseMeterPanel(QWidget):
     """Base class for all Ozone-style meter popup panels"""
-    
+
     closed = pyqtSignal()
-    
+
+    # Spectrum constants
+    SPECTRUM_FFT_SIZE = 4096
+    SPECTRUM_FREQ_MIN = 20.0
+    SPECTRUM_FREQ_MAX = 20000.0
+    SPECTRUM_DB_MIN = -80.0
+    SPECTRUM_DB_MAX = 0.0
+
     def __init__(self, title="Meter", width=520, height=300, parent=None):
         super().__init__(parent)
         self.setWindowFlags(
@@ -128,10 +135,18 @@ class BaseMeterPanel(QWidget):
                 font-family: 'SF Pro Display', 'Segoe UI', 'Helvetica Neue', sans-serif;
             }}
         """)
-        
+
         self._title = title
         self._drag_pos = None
-        
+
+        # V5.10.6: Spectrum data (Ozone 12 style live FFT)
+        self._spectrum_magnitudes = None  # dB per FFT bin
+        self._spectrum_freqs = None       # frequency per bin
+        self._spectrum_peak_hold = None   # peak hold trace
+        self._spectrum_peak_decay = 0.5   # dB per frame
+        self._spectrum_smooth = None      # smoothed display
+        self._spectrum_smooth_factor = 0.7  # exponential smoothing
+
         # Update timer
         self._timer = QTimer(self)
         self._timer.setInterval(50)  # 20fps metering
@@ -140,19 +155,105 @@ class BaseMeterPanel(QWidget):
     def show(self):
         super().show()
         self._timer.start()
-    
+        # V5.10.6: Auto-find and feed audio for spectrum
+        self._auto_find_audio()
+
     def hide(self):
         self._timer.stop()
         super().hide()
-    
+
     def close(self):
         self._timer.stop()
         self.closed.emit()
         super().close()
-    
+
     def _on_tick(self):
         """Override in subclass for animation"""
+        # V5.10.6: Auto-feed spectrum from audio file
+        self._auto_feed_spectrum()
         self.update()
+
+    def _auto_find_audio(self):
+        """V5.10.6: Find loaded audio file for spectrum display."""
+        self._spectrum_audio_path = None
+        self._spectrum_audio_sr = 44100
+        self._spectrum_audio_frames = 0
+        self._spectrum_tick = 0
+
+        try:
+            import soundfile as sf
+
+            # Walk up parent chain to find main window with audio_files
+            parent = self.parent()
+            while parent is not None:
+                # Check audio_files (main track list)
+                if hasattr(parent, 'audio_files') and parent.audio_files:
+                    af = parent.audio_files[0]
+                    path = getattr(af, 'path', af) if not isinstance(af, str) else af
+                    if path and os.path.exists(path):
+                        info = sf.info(path)
+                        self._spectrum_audio_path = path
+                        self._spectrum_audio_sr = info.samplerate
+                        self._spectrum_audio_frames = info.frames
+                        return
+
+                # Check chain input
+                ch = getattr(parent, 'chain', None) or getattr(parent, '_right_chain', None)
+                if ch and hasattr(ch, 'input_path') and ch.input_path and os.path.exists(ch.input_path):
+                    info = sf.info(ch.input_path)
+                    self._spectrum_audio_path = ch.input_path
+                    self._spectrum_audio_sr = info.samplerate
+                    self._spectrum_audio_frames = info.frames
+                    return
+
+                parent = parent.parent() if hasattr(parent, 'parent') else None
+
+            # Fallback: scan for recent WAV in common locations
+            for search_dir in [os.path.expanduser("~/Desktop"), os.path.expanduser("~/Music"),
+                               os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))]:
+                if os.path.exists(search_dir):
+                    for fname in sorted(os.listdir(search_dir)):
+                        if fname.lower().endswith('.wav') and not fname.startswith('.'):
+                            fpath = os.path.join(search_dir, fname)
+                            try:
+                                info = sf.info(fpath)
+                                if info.frames > 44100:
+                                    self._spectrum_audio_path = fpath
+                                    self._spectrum_audio_sr = info.samplerate
+                                    self._spectrum_audio_frames = info.frames
+                                    return
+                            except Exception:
+                                continue
+        except Exception:
+            pass
+
+    def _auto_feed_spectrum(self):
+        """V5.10.6: Read audio chunk and feed spectrum — throttled to every 5th tick (~250ms)."""
+        self._spectrum_tick += 1
+
+        if not self._spectrum_audio_path or self._spectrum_audio_frames < 4096:
+            # Retry finding audio every 2 seconds
+            if self._spectrum_tick % 40 == 0:
+                self._auto_find_audio()
+            return
+
+        # Only read file every 5th tick (250ms) to avoid CPU spike
+        if self._spectrum_tick % 5 != 0:
+            return
+
+        try:
+            import soundfile as sf
+            sr = self._spectrum_audio_sr
+            frames = self._spectrum_audio_frames
+            base = min(int(sr * 30), frames // 2)
+            pos = (base + self._spectrum_tick * 2048) % max(1, frames - 4096)
+            end = min(frames, pos + 4096)
+
+            if end > pos + 100:
+                data, _ = sf.read(self._spectrum_audio_path, start=pos, stop=end)
+                self.set_audio_data(data, sr)
+        except Exception:
+            pass
     
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
@@ -204,7 +305,301 @@ class BaseMeterPanel(QWidget):
         painter.setPen(QPen(QColor(0, 180, 220, 60), 1.0))
         painter.drawLine(0, 32, self.width(), 32)
     
-    def _draw_grid(self, painter: QPainter, rect: QRectF, 
+    # ─── V5.10.6: Spectrum feed + rendering (Ozone 12 style) ───
+
+    def set_audio_data(self, samples, sample_rate=44100):
+        """Feed raw PCM samples for FFT spectrum display (Ozone 12 style)."""
+        import math
+        if samples is None or len(samples) == 0:
+            return
+
+        # Mono mix if stereo
+        if samples.ndim > 1:
+            samples = samples.mean(axis=1)
+
+        n = min(len(samples), self.SPECTRUM_FFT_SIZE)
+        chunk = samples[-n:]
+
+        # Hann window + FFT
+        window = np.hanning(n)
+        fft_result = np.fft.rfft(chunk * window, n=self.SPECTRUM_FFT_SIZE)
+        magnitudes = np.abs(fft_result)
+        magnitudes = 20.0 * np.log10(np.maximum(magnitudes, 1e-10))
+        magnitudes -= np.max(magnitudes)  # normalize to peak = 0 dB
+
+        self._spectrum_freqs = np.fft.rfftfreq(self.SPECTRUM_FFT_SIZE, 1.0 / sample_rate)
+        self._spectrum_magnitudes = magnitudes
+
+        # Exponential smoothing
+        if self._spectrum_smooth is None or len(self._spectrum_smooth) != len(magnitudes):
+            self._spectrum_smooth = magnitudes.copy()
+        else:
+            a = self._spectrum_smooth_factor
+            self._spectrum_smooth = a * self._spectrum_smooth + (1 - a) * magnitudes
+
+        # Peak hold
+        if self._spectrum_peak_hold is None or len(self._spectrum_peak_hold) != len(magnitudes):
+            self._spectrum_peak_hold = magnitudes.copy()
+        else:
+            for i in range(len(magnitudes)):
+                if magnitudes[i] > self._spectrum_peak_hold[i]:
+                    self._spectrum_peak_hold[i] = magnitudes[i]
+                else:
+                    self._spectrum_peak_hold[i] -= self._spectrum_peak_decay
+
+    def _draw_spectrum(self, painter, rect, alpha=100):
+        """Draw Ozone 12-style spectrum fill in the given QRectF area.
+
+        Renders teal gradient fill + outline + peak hold trace.
+        """
+        import math
+        if self._spectrum_smooth is None or self._spectrum_freqs is None:
+            return
+
+        mags = self._spectrum_smooth
+        freqs = self._spectrum_freqs
+        px, py = rect.x(), rect.y()
+        pw, ph = rect.width(), rect.height()
+        log_min = math.log10(self.SPECTRUM_FREQ_MIN)
+        log_max = math.log10(self.SPECTRUM_FREQ_MAX)
+        db_range = self.SPECTRUM_DB_MAX - self.SPECTRUM_DB_MIN
+
+        def freq_to_x(f):
+            if f <= 0:
+                f = self.SPECTRUM_FREQ_MIN
+            lf = math.log10(max(self.SPECTRUM_FREQ_MIN, min(self.SPECTRUM_FREQ_MAX, f)))
+            return px + (lf - log_min) / (log_max - log_min) * pw
+
+        def db_to_y(db):
+            db = max(self.SPECTRUM_DB_MIN, min(self.SPECTRUM_DB_MAX, db))
+            return py + ph - (db - self.SPECTRUM_DB_MIN) / db_range * ph
+
+        bottom_y = py + ph
+
+        # Build spectrum path
+        path = QPainterPath()
+        first = True
+        for i in range(len(freqs)):
+            f = freqs[i]
+            if f < self.SPECTRUM_FREQ_MIN or f > self.SPECTRUM_FREQ_MAX:
+                continue
+            x = freq_to_x(f)
+            y = db_to_y(mags[i])
+            if first:
+                path.moveTo(x, bottom_y)
+                path.lineTo(x, y)
+                first = False
+            else:
+                path.lineTo(x, y)
+
+        if first:
+            return  # no data in range
+
+        path.lineTo(freq_to_x(self.SPECTRUM_FREQ_MAX), bottom_y)
+        path.closeSubpath()
+
+        # Gradient fill (teal, Ozone 12 style)
+        fill_grad = QLinearGradient(0, py, 0, bottom_y)
+        fill_grad.setColorAt(0.0, QColor(0, 180, 216, int(alpha * 0.8)))
+        fill_grad.setColorAt(0.5, QColor(0, 160, 200, int(alpha * 0.5)))
+        fill_grad.setColorAt(1.0, QColor(0, 140, 180, int(alpha * 0.15)))
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QBrush(fill_grad))
+        painter.drawPath(path)
+
+        # Glow pass
+        painter.setPen(QPen(QColor(0, 200, 220, int(alpha * 0.4)), 3.0))
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawPath(path)
+
+        # Sharp outline
+        painter.setPen(QPen(QColor(0, 200, 220, int(alpha * 0.9)), 1.0))
+        painter.drawPath(path)
+
+        # Peak hold trace
+        if self._spectrum_peak_hold is not None:
+            peak_path = QPainterPath()
+            peak_first = True
+            for i in range(len(freqs)):
+                f = freqs[i]
+                if f < self.SPECTRUM_FREQ_MIN or f > self.SPECTRUM_FREQ_MAX:
+                    continue
+                x = freq_to_x(f)
+                y = db_to_y(self._spectrum_peak_hold[i])
+                if peak_first:
+                    peak_path.moveTo(x, y)
+                    peak_first = False
+                else:
+                    peak_path.lineTo(x, y)
+            painter.setPen(QPen(QColor(255, 255, 255, 50), 0.8))
+            painter.drawPath(peak_path)
+
+    def _draw_spectrum_with_gr(self, painter, rect, gr_db=0.0, alpha=80):
+        """Draw spectrum showing gain reduction effect — top portion = original, bottom fill = after GR.
+
+        Like Ozone 12 Maximizer: the gap between the outline and the fill shows
+        how much the signal is being pushed down by the limiter/maximizer.
+        """
+        import math
+        if self._spectrum_smooth is None or self._spectrum_freqs is None:
+            return
+
+        mags = self._spectrum_smooth
+        freqs = self._spectrum_freqs
+        px, py = rect.x(), rect.y()
+        pw, ph = rect.width(), rect.height()
+        log_min = math.log10(self.SPECTRUM_FREQ_MIN)
+        log_max = math.log10(self.SPECTRUM_FREQ_MAX)
+        db_range = self.SPECTRUM_DB_MAX - self.SPECTRUM_DB_MIN
+
+        def freq_to_x(f):
+            if f <= 0: f = self.SPECTRUM_FREQ_MIN
+            lf = math.log10(max(self.SPECTRUM_FREQ_MIN, min(self.SPECTRUM_FREQ_MAX, f)))
+            return px + (lf - log_min) / (log_max - log_min) * pw
+
+        def db_to_y(db):
+            db = max(self.SPECTRUM_DB_MIN, min(self.SPECTRUM_DB_MAX, db))
+            return py + ph - (db - self.SPECTRUM_DB_MIN) / db_range * ph
+
+        bottom_y = py + ph
+        gr_offset = abs(gr_db) * (ph / 80.0)  # scale GR to pixel offset
+
+        # Build "original" spectrum path (before GR)
+        orig_path = QPainterPath()
+        # Build "processed" spectrum path (after GR — shifted down)
+        proc_path = QPainterPath()
+        first = True
+
+        for i in range(len(freqs)):
+            f = freqs[i]
+            if f < self.SPECTRUM_FREQ_MIN or f > self.SPECTRUM_FREQ_MAX:
+                continue
+            x = freq_to_x(f)
+            y_orig = db_to_y(mags[i])
+            y_proc = min(bottom_y, y_orig + gr_offset)
+            if first:
+                orig_path.moveTo(x, bottom_y)
+                orig_path.lineTo(x, y_orig)
+                proc_path.moveTo(x, bottom_y)
+                proc_path.lineTo(x, y_proc)
+                first = False
+            else:
+                orig_path.lineTo(x, y_orig)
+                proc_path.lineTo(x, y_proc)
+
+        if first:
+            return
+
+        last_x = freq_to_x(self.SPECTRUM_FREQ_MAX)
+        orig_path.lineTo(last_x, bottom_y)
+        orig_path.closeSubpath()
+        proc_path.lineTo(last_x, bottom_y)
+        proc_path.closeSubpath()
+
+        # Fill processed (after GR) — darker teal
+        fill_grad = QLinearGradient(0, py, 0, bottom_y)
+        fill_grad.setColorAt(0.0, QColor(0, 180, 216, int(alpha * 0.7)))
+        fill_grad.setColorAt(0.5, QColor(0, 160, 200, int(alpha * 0.4)))
+        fill_grad.setColorAt(1.0, QColor(0, 140, 180, int(alpha * 0.1)))
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QBrush(fill_grad))
+        painter.drawPath(proc_path)
+
+        # GR zone (between original and processed) — amber/orange tint
+        if gr_db < -0.5:
+            gr_zone = QPainterPath()
+            gr_zone.addPath(orig_path)
+            # Subtract processed path to show only the GR difference
+            painter.setOpacity(0.3)
+            gr_fill = QLinearGradient(0, py, 0, bottom_y)
+            gr_fill.setColorAt(0.0, QColor(255, 149, 0, 60))
+            gr_fill.setColorAt(1.0, QColor(255, 80, 0, 20))
+            painter.setBrush(QBrush(gr_fill))
+            painter.drawPath(orig_path)
+            painter.setOpacity(1.0)
+
+        # Original outline (thin, subtle)
+        painter.setPen(QPen(QColor(255, 255, 255, 40), 0.5))
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawPath(orig_path)
+
+        # Processed outline (bright)
+        painter.setPen(QPen(QColor(0, 200, 220, int(alpha * 0.9)), 1.2))
+        painter.drawPath(proc_path)
+
+    def _draw_spectrum_with_reduction(self, painter, rect, reduction_curve=None, alpha=80):
+        """Draw spectrum with Soothe/Clarity-style reduction overlay.
+
+        Shows the original spectrum and overlays a red/pink area where
+        resonances are being suppressed — like Ozone 12 Clarity module.
+        """
+        import math
+        if self._spectrum_smooth is None or self._spectrum_freqs is None:
+            return
+
+        mags = self._spectrum_smooth
+        freqs = self._spectrum_freqs
+        px, py = rect.x(), rect.y()
+        pw, ph = rect.width(), rect.height()
+        log_min = math.log10(self.SPECTRUM_FREQ_MIN)
+        log_max = math.log10(self.SPECTRUM_FREQ_MAX)
+        db_range_val = self.SPECTRUM_DB_MAX - self.SPECTRUM_DB_MIN
+
+        def freq_to_x(f):
+            if f <= 0: f = self.SPECTRUM_FREQ_MIN
+            lf = math.log10(max(self.SPECTRUM_FREQ_MIN, min(self.SPECTRUM_FREQ_MAX, f)))
+            return px + (lf - log_min) / (log_max - log_min) * pw
+
+        def db_to_y(db):
+            db = max(self.SPECTRUM_DB_MIN, min(self.SPECTRUM_DB_MAX, db))
+            return py + ph - (db - self.SPECTRUM_DB_MIN) / db_range_val * ph
+
+        bottom_y = py + ph
+
+        # Draw base spectrum (teal)
+        self._draw_spectrum(painter, rect, alpha=int(alpha * 0.6))
+
+        # Draw reduction overlay (red/pink) if we have reduction data
+        if reduction_curve is not None and len(reduction_curve) > 0:
+            red_path = QPainterPath()
+            red_freqs = np.logspace(np.log10(20), np.log10(20000), len(reduction_curve))
+            first = True
+            zero_y = db_to_y(-40)  # baseline for reduction display
+
+            for i in range(len(reduction_curve)):
+                f = red_freqs[i]
+                if f < self.SPECTRUM_FREQ_MIN or f > self.SPECTRUM_FREQ_MAX:
+                    continue
+                x = freq_to_x(f)
+                # Reduction is negative dB — map to height
+                red_db = abs(reduction_curve[i])
+                y = zero_y - red_db * (ph / 12.0)
+                if first:
+                    red_path.moveTo(x, zero_y)
+                    red_path.lineTo(x, y)
+                    first = False
+                else:
+                    red_path.lineTo(x, y)
+
+            if not first:
+                red_path.lineTo(freq_to_x(self.SPECTRUM_FREQ_MAX), zero_y)
+                red_path.closeSubpath()
+
+                # Pink/red fill showing what's being removed
+                red_grad = QLinearGradient(0, py, 0, bottom_y)
+                red_grad.setColorAt(0.0, QColor(220, 60, 80, 80))
+                red_grad.setColorAt(0.5, QColor(200, 40, 60, 50))
+                red_grad.setColorAt(1.0, QColor(180, 30, 50, 20))
+                painter.setPen(Qt.PenStyle.NoPen)
+                painter.setBrush(QBrush(red_grad))
+                painter.drawPath(red_path)
+
+                # Red outline
+                painter.setPen(QPen(QColor(220, 80, 100, 150), 1.0))
+                painter.setBrush(Qt.BrushStyle.NoBrush)
+                painter.drawPath(red_path)
+
+    def _draw_grid(self, painter: QPainter, rect: QRectF,
                    h_lines: int = 5, v_lines: int = 0,
                    db_range: tuple = (-12, 0)):
         """Draw dB grid lines"""
@@ -371,6 +766,10 @@ class MaximizerMeterPanel(BaseMeterPanel):
         inner_grad.setColorAt(1, QColor(14, 18, 24))
         p.setBrush(QBrush(inner_grad))
         p.drawRoundedRect(gr_rect, 6, 6)
+
+        # V5.10.6: Spectrum with GR overlay (Ozone 12 style — shows gain reduction effect)
+        current_gr = self._gr_history[-1] if self._gr_history else 0.0
+        self._draw_spectrum_with_gr(p, gr_rect, gr_db=current_gr, alpha=80)
 
         # Grid
         self._draw_gr_grid(p, gr_rect)
@@ -556,7 +955,10 @@ class ImagerMeterPanel(BaseMeterPanel):
         p.setPen(Qt.PenStyle.NoPen)
         p.setBrush(OzoneColors.BG_PANEL)
         p.drawRoundedRect(curve_rect, 4, 4)
-        
+
+        # V5.10.6: Spectrum behind width curve (Ozone 12 style)
+        self._draw_spectrum(p, curve_rect, alpha=50)
+
         # Frequency grid
         freq_labels = [20, 50, 100, 200, 500, "1k", "2k", "5k", "10k", "20k"]
         freq_values = [20, 50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000]
@@ -754,7 +1156,10 @@ class CompressorMeterPanel(BaseMeterPanel):
         p.setPen(Qt.PenStyle.NoPen)
         p.setBrush(OzoneColors.BG_PANEL)
         p.drawRoundedRect(gr_rect, 4, 4)
-        
+
+        # V5.10.6: Spectrum with compression GR overlay (shows how much is compressed)
+        self._draw_spectrum_with_gr(p, gr_rect, gr_db=self._gr_current, alpha=70)
+
         # Grid
         for db in [0, -3, -6, -9, -12]:
             y = gr_rect.y() + gr_rect.height() * (-db / 12.0)
@@ -932,7 +1337,11 @@ class SootheMeterPanel(BaseMeterPanel):
         p.setPen(Qt.PenStyle.NoPen)
         p.setBrush(QBrush(inner_grad))
         p.drawRoundedRect(curve_rect, 6, 6)
-        
+
+        # V5.10.6: Spectrum with resonance reduction overlay (Ozone 12 Clarity style)
+        self._draw_spectrum_with_reduction(p, curve_rect,
+            reduction_curve=self._reduction_db if self._amount > 0 else None, alpha=70)
+
         # Freq grid
         freq_labels = [50, 100, 200, 500, "1k", "2k", "5k", "10k", "20k"]
         freq_values = [50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000]
