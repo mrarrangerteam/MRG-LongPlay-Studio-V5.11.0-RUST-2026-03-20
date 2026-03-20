@@ -8037,6 +8037,30 @@ class LongPlayStudioV4(QMainWindow):
         self.btn_open_full_master.clicked.connect(self._master_export_from_right_panel)
         layout.addWidget(self.btn_open_full_master)
 
+        # ── AI Master button ──
+        self.btn_ai_master = QPushButton("🤖  AI MASTER")
+        self.btn_ai_master.setFixedHeight(40)
+        self.btn_ai_master.setStyleSheet("""
+            QPushButton {
+                background: qlineargradient(x1:0,y1:0,x2:0,y2:1,
+                    stop:0 #FF9500, stop:1 #CC7700);
+                color: #0A0A0C;
+                border: none; border-radius: 6px;
+                padding: 8px 16px;
+                font-weight: bold; font-size: 12px;
+                font-family: 'SF Pro Display', 'Menlo', monospace;
+            }
+            QPushButton:hover {
+                background: qlineargradient(x1:0,y1:0,x2:0,y2:1,
+                    stop:0 #FFB340, stop:1 #FF9500);
+            }
+        """)
+        self.btn_ai_master.setToolTip(
+            "AI Master: วิเคราะห์ทุกเพลงใน playlist\n"
+            "แล้วตั้งค่า Gain/EQ/Dynamics/IRC อัตโนมัติ")
+        self.btn_ai_master.clicked.connect(self._run_ai_master)
+        layout.addWidget(self.btn_ai_master)
+
         layout.addStretch()
         parent_scroll.setWidget(panel)
         
@@ -8524,19 +8548,46 @@ class LongPlayStudioV4(QMainWindow):
                 print("[BYPASS] ⚠️ No original file found")
 
         else:
-            # ── MASTERED: process audio and play mastered version ──
-            # Use _apply_realtime_preview which processes + hot-swaps
+            # ── MASTERED: play processed version ──
             gain_db = getattr(self, '_right_gain_db', 0.0)
-            if gain_db < 0.01:
-                # If gain is 0, apply a minimal processing to hear the chain
-                # Force trigger with current settings
-                pass
-            self._trigger_master_rerender()
-            # Also apply QAudioOutput volume for immediate feedback
-            volume = max(0.5, min(3.0, 0.5 + gain_db / 20.0 * 2.5))
-            if hasattr(self.audio_player, 'audio_output'):
-                self.audio_player.audio_output.setVolume(volume)
-            print(f"[BYPASS] → MASTERED (gain={gain_db:.1f}dB)")
+
+            # Strategy 1: Check if chain already rendered a mastered file
+            mastered_file = None
+            original_file = None
+            if hasattr(self, 'audio_engine') and hasattr(self.audio_engine, '_current_file'):
+                original_file = self.audio_engine._current_file
+            elif hasattr(self, 'audio_player') and self.audio_player.files:
+                idx = self.audio_player.current_file_index
+                if 0 <= idx < len(self.audio_player.files):
+                    original_file = self.audio_player.files[idx]
+
+            if original_file:
+                base, ext = os.path.splitext(original_file)
+                candidate = f"{base}_mastered{ext}"
+                if os.path.exists(candidate):
+                    mastered_file = candidate
+
+            # Strategy 2: Check if _apply_realtime_preview created a temp preview
+            if not mastered_file and hasattr(self, '_gained_preview_path'):
+                if self._gained_preview_path and os.path.exists(self._gained_preview_path):
+                    mastered_file = self._gained_preview_path
+
+            if mastered_file:
+                # Direct switch to existing mastered file
+                self.audio_player.player.stop()
+                self.audio_player.player.setSource(QUrl.fromLocalFile(mastered_file))
+                volume = max(0.5, min(3.0, 0.5 + gain_db / 20.0 * 2.5))
+                if hasattr(self.audio_player, 'audio_output'):
+                    self.audio_player.audio_output.setVolume(volume)
+                QTimer.singleShot(50, lambda: self._restore_after_gain(current_pos, was_playing))
+                print(f"[A/B] Switching to mastered: {os.path.basename(mastered_file)}")
+            else:
+                # No mastered file yet — trigger render + hot-swap
+                self._trigger_master_rerender()
+                volume = max(0.5, min(3.0, 0.5 + gain_db / 20.0 * 2.5))
+                if hasattr(self.audio_player, 'audio_output'):
+                    self.audio_player.audio_output.setVolume(volume)
+                print(f"[A/B] Rendering mastered preview (gain={gain_db:.1f}dB)")
 
         mode_str = "ORIGINAL" if is_original else "MASTERED"
         print(f"[BYPASS] Switched to {mode_str}")
@@ -9871,6 +9922,104 @@ class LongPlayStudioV4(QMainWindow):
         # Auto-trigger batch mode after window is shown
         if hasattr(self, '_master_window') and self._master_window is not None:
             QTimer.singleShot(600, self._master_window.btn_batch_render.click)
+
+    def _run_ai_master(self):
+        """AI Master: วิเคราะห์ทุกเพลงใน playlist แล้วตั้งค่าอัตโนมัติ"""
+        try:
+            from modules.master.ai_master import AIMasterEngine
+        except ImportError as e:
+            QMessageBox.warning(self, "AI Master", f"Cannot load AI Master:\n{e}")
+            return
+
+        # Gather audio files from playlist
+        audio_files = []
+        if hasattr(self, 'audio_player') and self.audio_player.files:
+            audio_files = list(self.audio_player.files)
+
+        if not audio_files:
+            QMessageBox.warning(self, "AI Master", "กรุณาเพิ่มเพลงก่อน")
+            return
+
+        # Get ceiling from right panel
+        out_ceiling = self.right_ceiling_spin.value() if hasattr(self, 'right_ceiling_spin') else -1.0
+
+        from PyQt6.QtWidgets import QProgressDialog
+        progress = QProgressDialog("AI Master กำลังวิเคราะห์...", "Cancel", 0, 100, self)
+        progress.setWindowModality(Qt.WindowModality.WindowModal)
+        progress.show()
+
+        def update_progress(pct, msg):
+            progress.setValue(pct)
+            progress.setLabelText(msg)
+            QApplication.processEvents()
+
+        try:
+            engine = AIMasterEngine()
+            settings = engine.analyze_playlist(
+                audio_files,
+                out_ceiling_db=out_ceiling,
+                platform="youtube",
+                progress_callback=update_progress
+            )
+
+            progress.close()
+
+            # Store for later use
+            self._ai_master_settings = settings
+            self._ai_master_engine = engine
+
+            # Apply preset for current track
+            current_idx = max(0, getattr(self.audio_player, 'current_file_index', 0))
+            if current_idx < len(settings.track_presets):
+                preset = settings.track_presets[current_idx]
+                self._apply_ai_preset(preset)
+
+            QMessageBox.information(self, "AI Master",
+                f"วิเคราะห์เสร็จ!\n\n"
+                f"เพลงทั้งหมด: {len(settings.track_presets)}\n"
+                f"Gain range: {settings.gain_range_db:.1f} dB\n"
+                f"Target: {settings.target_lufs:.0f} LUFS\n\n"
+                f"ค่าถูกตั้งเป็นค่าเริ่มต้นแล้ว — ปรับ manual ได้เลย")
+
+        except Exception as e:
+            progress.close()
+            QMessageBox.critical(self, "AI Master Error", f"เกิดข้อผิดพลาด:\n{str(e)}")
+            import traceback
+            traceback.print_exc()
+
+    def _apply_ai_preset(self, preset):
+        """Apply AI preset to right panel knobs/controls."""
+        # Gain
+        if hasattr(self, 'right_gain_dial'):
+            self.right_gain_dial.setValue(preset.pre_gain_db)
+            self._on_right_gain_changed(int(preset.pre_gain_db * 10))
+
+        # Ceiling
+        if hasattr(self, 'right_ceiling_spin'):
+            self.right_ceiling_spin.setValue(preset.maximizer_ceiling_db)
+
+        # Width
+        if hasattr(self, 'right_width_dial'):
+            self.right_width_dial.setValue(preset.width_amount * 100)
+
+        # IRC Mode
+        if hasattr(self, 'right_irc_combo'):
+            # Map IRC_IV → IRC 4
+            mode_map = {"IRC_I": "IRC 1", "IRC_II": "IRC 2", "IRC_III": "IRC 3",
+                        "IRC_IV": "IRC 4", "IRC_V": "IRC 5"}
+            mode_name = mode_map.get(preset.irc_mode, preset.irc_mode)
+            idx = self.right_irc_combo.findText(mode_name)
+            if idx >= 0:
+                self.right_irc_combo.setCurrentIndex(idx)
+
+        # Soothe
+        if hasattr(self, 'right_res_depth') and preset.soothe_amount > 0:
+            self.right_res_depth.setValue(int(preset.soothe_amount / 10))
+            if hasattr(self, 'right_res_enabled'):
+                self.right_res_enabled.setChecked(True)
+
+        print(f"[AI MASTER] Applied preset for {preset.filename}: "
+              f"gain={preset.pre_gain_db:+.1f}dB, IRC={preset.irc_mode}")
 
     def _master_export_from_right_panel(self):
         """V5.10: Master & export all tracks using right panel settings (no separate window)."""

@@ -36,6 +36,7 @@ from .loudness import LoudnessMeter, LoudnessAnalysis
 from .ai_assist import AIAssist, MasterRecommendation
 from .genre_profiles import PLATFORM_TARGETS, IRC_MODES, get_irc_mode
 from .limiter import LookAheadLimiter, LookAheadLimiterFast
+from .soothe import SootheProcessor
 
 # ─── Audio processing dependencies ───
 try:
@@ -834,11 +835,12 @@ class MasterChain:
         self.output_path = None
         self.preview_path = None
 
-        # Modules (signal flow order) — ResSup → EQ → DYN → IMG → MAX
+        # Modules (signal flow order) — ResSup → EQ → DYN → IMG → Soothe → MAX
         self.resonance_suppressor = ResonanceSuppressor()
         self.equalizer = Equalizer()
         self.dynamics = Dynamics()
         self.imager = Imager()
+        self.soothe = SootheProcessor()
         self.maximizer = Maximizer()
 
         # Loudness tools
@@ -1063,6 +1065,14 @@ class MasterChain:
         result = _RealAudioProcessor.process_imager(result, sr, self.imager, intensity)
         result = np.nan_to_num(result, nan=0.0, posinf=0.99, neginf=-0.99)
         self._send_meter(result, sr, "post_imager")
+
+        # Step 3.5: Soothe (Dynamic Resonance Suppression)
+        if self.soothe.enabled and self.soothe.amount > 0:
+            if callback:
+                callback(48, "Applying Soothe (Resonance Suppression)...")
+            result = self.soothe.process(result)
+            result = np.nan_to_num(result, nan=0.0, posinf=0.99, neginf=-0.99)
+            self._send_meter(result, sr, "post_soothe")
 
         # Step 4: Maximizer (THE KEY MODULE — loudness push!)
         if callback:
