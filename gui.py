@@ -8351,6 +8351,10 @@ class LongPlayStudioV4(QMainWindow):
             if hasattr(self.right_logic_meter, 'set_ceiling'):
                 self.right_logic_meter.set_ceiling(ceiling)
 
+        # 5. Process audio + hot-swap in QMediaPlayer (offline preview)
+        #    This renders the gained audio to a temp WAV and swaps it in
+        self._trigger_master_rerender()
+
     def _on_right_ceiling_changed(self, value: float):
         """Output ceiling changed — update RT engine ceiling + meters."""
         gain_db = getattr(self, '_right_gain_db', 0.0)
