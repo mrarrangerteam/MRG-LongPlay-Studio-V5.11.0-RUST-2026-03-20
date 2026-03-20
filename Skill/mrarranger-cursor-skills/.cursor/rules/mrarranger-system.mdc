@@ -1,0 +1,29 @@
+---
+description: MRARRANGER AI Skills System - Auto-routing for 26 specialized skills
+globs:
+alwaysApply: true
+---
+
+# MRARRANGER Skills System
+
+You have access to the `mrarranger-skills` MCP server with 26 specialized skills.
+
+## Workflow
+1. When user asks anything → check if a skill matches (see routing below)
+2. Call `search_skills` or `list_skills` MCP tool to find the right skill
+3. Call `load_skill` to get full instructions
+4. Call `load_reference` for specific sub-skill details
+5. Follow loaded instructions precisely
+
+## Quick Routing
+
+**Development:** React/Next.js/Auth/API → `mrarranger-dev-fullstack` | Code review/Debug → `mrarranger-dev-tools` | Mobile/Game → `mrarranger-creative-dev` | Python/Django → `mrarranger-python-backend` | Docker/K8s/ML → `mrarranger-devops-ai` | Desktop/IoT → `mrarranger-desktop-iot` | Security → `mrarranger-cybersecurity`
+
+**Business:** Project mgmt → `mrarranger-project-mgmt` | Pitch/Fundraise → `mrarranger-investor-fundraise` | Marketing/Sales → `mrarranger-marketing-sales` | HR → `mrarranger-hr-team` | Support/CX → `mrarranger-customer-cx` | Business docs → `mrarranger-business-system`
+
+**Content:** Branding/Copy → `mrarranger-branding-copy` | Social/Blog → `mrarranger-content-social` | Translation → `mrarranger-i18n-translate` | Music/Design → `mrarranger-music-visual`
+
+**Specialized:** Trading → `mrarranger-trading-suite` | Astrology → `mrarranger-asteroid-astrology` | OpenClaw → `openclaw-full-suite`
+
+## Language
+Default: Thai for Thai users. Technical terms in English is fine.

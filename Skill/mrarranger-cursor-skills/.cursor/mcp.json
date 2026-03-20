@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "mrarranger-skills": {
+      "command": "node",
+      "args": [
+        "${workspaceFolder}/mcp-server/index.js"
+      ],
+      "env": {
+        "MRARRANGER_SKILLS_DIR": "${workspaceFolder}/skills"
+      }
+    }
+  }
+}

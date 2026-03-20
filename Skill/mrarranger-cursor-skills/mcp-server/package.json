@@ -1,0 +1,17 @@
+{
+  "name": "mrarranger-skills-mcp",
+  "version": "1.0.0",
+  "description": "MCP Server for MRARRANGER Skills System - serves 26 specialized AI skills to Cursor",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "node --watch index.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.1"
+  },
+  "bin": {
+    "mrarranger-skills-mcp": "./index.js"
+  }
+}
