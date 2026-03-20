@@ -36,6 +36,36 @@ class Maximizer:
     Every parameter maps to real FFmpeg audio filters.
     """
 
+    # IRC sub-modes matching Ozone 12 exactly
+    IRC_SUB_MODES = {
+        "IRC 1": [],
+        "IRC 2": [],
+        "IRC 3": ["Pumping", "Balanced", "Crisp", "Clipping"],
+        "IRC 4": ["Classic", "Modern", "Transient"],
+        "IRC 5": [],
+        "IRC LL": [],
+    }
+
+    # Per-sub-mode audio parameters
+    IRC_SUB_MODE_PARAMS = {
+        "Pumping":   {"attack_ms": 0.5, "release_ms": 50, "lookahead_ms": 0, "knee_db": 0},
+        "Balanced":  {"attack_ms": 1.0, "release_ms": 100, "lookahead_ms": 1.0, "knee_db": 3},
+        "Crisp":     {"attack_ms": 0.1, "release_ms": 80, "lookahead_ms": 1.5, "knee_db": 2},
+        "Clipping":  {"attack_ms": 0.0, "release_ms": 0, "lookahead_ms": 0, "knee_db": 0},
+        "Classic":   {"attack_ms": 2.0, "release_ms": 150, "lookahead_ms": 2.0, "knee_db": 6},
+        "Modern":    {"attack_ms": 1.0, "release_ms": 100, "lookahead_ms": 1.5, "knee_db": 4},
+        "Transient": {"attack_ms": 5.0, "release_ms": 80, "lookahead_ms": 3.0, "knee_db": 4},
+    }
+
+    def get_available_sub_modes(self, irc_mode=None):
+        """Return available sub-modes for given IRC mode."""
+        mode = irc_mode or self.irc_mode
+        return self.IRC_SUB_MODES.get(mode, [])
+
+    def get_sub_mode_params(self):
+        """Return audio parameters for current sub-mode."""
+        return self.IRC_SUB_MODE_PARAMS.get(self.irc_sub_mode, {})
+
     def __init__(self):
         # ─── Core Limiter ───
         self.enabled = True

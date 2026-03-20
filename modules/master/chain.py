@@ -656,38 +656,62 @@ class _RealAudioProcessor:
 
     @staticmethod
     def _true_peak_limit(data, sr, ceiling_db):
-        """True peak limiting using chunk-based 4x oversampling."""
+        """True Peak Limiter (ITU-R BS.1770-4) with 4x oversampling ISP detection.
+
+        Per-chunk: upsample 4x → detect peaks → compute gain reduction →
+        apply with 1ms look-ahead smoothing → downsample → hard clip safety.
+        """
         try:
             ceiling_linear = 10 ** (ceiling_db / 20.0)
-            result = data.copy()
-            chunk_size = sr
+            result = data.copy().astype(np.float64)
+            chunk_size = sr  # process 1 second at a time
 
             for ch in range(data.shape[1] if data.ndim > 1 else 1):
-                signal = data[:, ch] if data.ndim > 1 else data
-                max_tp = 0.0
+                signal = data[:, ch].astype(np.float64) if data.ndim > 1 else data.astype(np.float64)
+
                 for start in range(0, len(signal), chunk_size):
                     end = min(start + chunk_size, len(signal))
                     chunk = signal[start:end]
-                    if len(chunk) < 4:
+                    if len(chunk) < 8:
                         continue
-                    oversampled = resample_poly(chunk, 4, 1)
-                    chunk_tp = np.max(np.abs(oversampled))
-                    max_tp = max(max_tp, chunk_tp)
 
-                if max_tp > ceiling_linear:
-                    reduction = ceiling_linear / max_tp
+                    # 4x upsample
+                    x_4x = resample_poly(chunk, 4, 1)
+                    peaks = np.abs(x_4x)
+
+                    # Look-ahead window (1ms at 4x rate)
+                    lookahead = max(4, int(sr * 4 * 0.001))
+
+                    # Compute gain envelope at 4x rate
+                    gain_4x = np.ones_like(x_4x)
+                    for i in range(len(x_4x)):
+                        if peaks[i] > ceiling_linear:
+                            reduction = ceiling_linear / peaks[i]
+                            la_start = max(0, i - lookahead)
+                            la_end = min(len(x_4x), i + lookahead)
+                            for j in range(la_start, la_end):
+                                dist = abs(j - i) / max(1, lookahead)
+                                smooth = 1.0 - (1.0 - reduction) * (1.0 - dist * dist)
+                                gain_4x[j] = min(gain_4x[j], smooth)
+
+                    # Apply gain at 4x rate
+                    x_4x *= gain_4x
+
+                    # Downsample back
+                    x_limited = resample_poly(x_4x, 1, 4)[:len(chunk)]
+
+                    # Hard clip safety
+                    x_limited = np.clip(x_limited, -ceiling_linear, ceiling_linear)
+
                     if data.ndim > 1:
-                        result[:, ch] = signal * reduction
+                        result[start:end, ch] = x_limited
                     else:
-                        result = signal * reduction
+                        result[start:end] = x_limited
 
-            return result
+            return result.astype(np.float32)
         except Exception:
             ceiling_linear = 10 ** (ceiling_db / 20.0)
-            peak = np.max(np.abs(data))
-            if peak > ceiling_linear:
-                return data * (ceiling_linear / peak)
-            return data
+            return np.clip(data, -ceiling_linear, ceiling_linear)
 
     # ─── Final True Peak Limiter ───
     @staticmethod
