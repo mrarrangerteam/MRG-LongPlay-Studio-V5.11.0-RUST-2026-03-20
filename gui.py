@@ -7731,6 +7731,15 @@ class LongPlayStudioV4(QMainWindow):
         self.right_irc_submode_widget.setVisible(False)  # Hidden by default (IRC 2 has no sub-modes)
         layout.addWidget(self.right_irc_submode_widget)
 
+        # V5.11.0: Sub-mode description label
+        self.right_irc_submode_desc = QLabel("")
+        self.right_irc_submode_desc.setWordWrap(True)
+        self.right_irc_submode_desc.setStyleSheet(
+            "color: #5A5A60; font-style: italic; font-size: 7px; "
+            "padding: 0px 4px; font-family: 'Menlo', sans-serif;")
+        layout.addWidget(self.right_irc_submode_desc)
+        self.right_irc_submode_desc.setVisible(False)
+
         # V5.10.5: Connect sub-mode change → re-sync chain with new sub-mode
         self.right_irc_submode.currentTextChanged.connect(self._on_right_irc_submode_changed)
 
@@ -8749,25 +8758,53 @@ class LongPlayStudioV4(QMainWindow):
         if not hasattr(self, 'right_irc_desc'):
             return
 
-        # Full descriptions with Thai + English
         irc_info = {
             "IRC 1": ("🎵 Transparent — สะอาด ไม่แต่งสีเสียง",
                        "ดีที่สุดสำหรับ Acoustic, Jazz, Classical\nLook-ahead 10ms, Release 200ms"),
             "IRC 2": ("🎶 Adaptive — Release ปรับตามเพลงอัตโนมัติ",
                        "All-purpose mastering ใช้ได้กับทุกแนวเพลง\nProgram-dependent release"),
             "IRC 3": ("🔊 Multi-band — แยก Low/Mid/High limit แยกกัน",
-                       "Bass ไม่กระทบ Treble เหมาะกับ Pop, Rock, R&B\nSub-modes: Pumping, Balanced, Crisp, Clipping"),
+                       "Bass ไม่กระทบ Treble เหมาะกับ Pop, Rock, R&B"),
             "IRC 4": ("🔥 Saturation + Limiting — เสียงอุ่น ดังมาก!",
-                       "Harmonic saturation + multiband limit\nเหมาะกับ EDM, Hip-Hop, Trap — ดังสุดๆ\nSub-modes: Classic, Modern, Transient"),
+                       "Harmonic saturation + multiband limit\nเหมาะกับ EDM, Hip-Hop, Trap"),
             "IRC 5": ("💎 Maximum Density — อัดแน่นที่สุด",
-                       "Heavy compression 3:1 + multi-band limit\nOzone 12 exclusive — เพิ่ม density สูงสุด"),
+                       "Heavy compression + multi-band limit\nOzone 12 exclusive"),
             "IRC LL": ("⚡ Low Latency — ไม่มี look-ahead",
-                        "สำหรับ real-time monitoring ขณะ mixing\nFast response, zero latency"),
+                        "สำหรับ real-time monitoring ขณะ mixing"),
         }
 
         desc_text, tooltip = irc_info.get(mode_name, ("", ""))
         self.right_irc_desc.setText(desc_text)
         self.right_irc_combo.setToolTip(tooltip)
+
+        # Show/hide sub-mode description
+        has_sub = mode_name in ("IRC 3", "IRC 4")
+        if hasattr(self, 'right_irc_submode_desc'):
+            self.right_irc_submode_desc.setVisible(has_sub)
+            if has_sub:
+                sub = self.right_irc_submode.currentText() if hasattr(self, 'right_irc_submode') else ""
+                self._update_irc_submode_description(mode_name, sub)
+
+    def _update_irc_submode_description(self, mode_name: str, sub_mode: str):
+        """V5.11.0: Update sub-mode description label."""
+        if not hasattr(self, 'right_irc_submode_desc'):
+            return
+
+        sub_info = {
+            # IRC 3 sub-modes
+            ("IRC 3", "Pumping"):  "⚡ Release เร็ว — ได้ยิน pump เหมาะ EDM/Dance",
+            ("IRC 3", "Balanced"): "✨ สมดุล — ใช้ได้ทุกแนว release นุ่ม (default)",
+            ("IRC 3", "Crisp"):    "🎸 เก็บ transient — เหมาะ Acoustic/Vocal/Jazz",
+            ("IRC 3", "Clipping"): "💥 Hard clip — ดังสุด! มี distortion ชัดเจน",
+            # IRC 4 sub-modes
+            ("IRC 4", "Classic"):   "🎹 อุ่น นุ่ม — soft knee, musical compression",
+            ("IRC 4", "Modern"):    "🎧 สะอาด — balanced transient, transparent loudness",
+            ("IRC 4", "Transient"): "🥁 เก็บ punch — attack ช้า เหมาะเพลงที่มี kick/snare แรง",
+        }
+
+        desc = sub_info.get((mode_name, sub_mode), "")
+        self.right_irc_submode_desc.setText(desc)
+        self.right_irc_submode_desc.setVisible(bool(desc))
 
     def _on_right_irc_mode_changed(self, mode_name: str):
         """V5.7: IRC mode changed — update sub-mode, sync to chain, trigger re-render."""
@@ -8827,6 +8864,9 @@ class LongPlayStudioV4(QMainWindow):
         if not sub_mode:
             return
         mode_name = self.right_irc_combo.currentText() if hasattr(self, 'right_irc_combo') else "IRC 2"
+
+        # V5.11.0: Update sub-mode description
+        self._update_irc_submode_description(mode_name, sub_mode)
 
         # RT engine
         if self._rt_engine and self._rt_active:
