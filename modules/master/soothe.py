@@ -23,10 +23,11 @@ except ImportError:
 
 
 class SootheProcessor:
-    """Backward-compatible wrapper — delegates to Soothe2Processor."""
+    """Backward-compatible wrapper — delegates to Soothe2Pro (production-grade)."""
 
     def __init__(self, sample_rate=44100):
-        self._impl = Soothe2Processor(sample_rate)
+        from .soothe2_pro import Soothe2Pro
+        self._impl = Soothe2Pro(sample_rate)
         self.sr = sample_rate
         self.enabled = False
         self.amount = 0.0
@@ -67,6 +68,22 @@ class SootheProcessor:
                      "depth_db", "sensitivity"]:
             if key in d:
                 setattr(self, key, d[key])
+
+    def get_reduction_spectrum(self):
+        """Passthrough to Soothe2Pro metering."""
+        return self._impl.get_reduction_spectrum()
+
+    def get_reduction_frequencies(self):
+        """Passthrough to Soothe2Pro metering."""
+        return self._impl.get_reduction_frequencies()
+
+    def get_delta_energy_db(self):
+        """Passthrough to Soothe2Pro metering."""
+        return self._impl.get_delta_energy_db()
+
+    def reset(self):
+        """Reset internal state."""
+        self._impl.reset()
 
     def __repr__(self):
         return (f"SootheProcessor(amount={self.amount:.0f}%, "
