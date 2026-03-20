@@ -8470,10 +8470,13 @@ class LongPlayStudioV4(QMainWindow):
         self._trigger_master_rerender()
 
     def _on_right_bypass_switch(self, is_original: bool):
-        """Toggle Original/Mastered bypass on the right panel Maximizer header."""
+        """Toggle Original/Mastered on the right panel Maximizer header.
+        Original = play original file, Mastered = play processed file via chain.
+        """
         self._right_bypass_active = is_original
+
+        # Update button styles
         if is_original:
-            # Show ORIGINAL state — bypass all processing
             self.btn_original.setStyleSheet(
                 "QPushButton { background: #FF9500; color: #0A0A0C; border: none; "
                 "border-radius: 12px; font-size: 10px; font-weight: bold; font-family: 'Menlo', monospace; }")
@@ -8482,7 +8485,6 @@ class LongPlayStudioV4(QMainWindow):
                 "border-radius: 12px; font-size: 10px; font-weight: bold; font-family: 'Menlo', monospace; }"
                 "QPushButton:hover { color: #48CAE4; }")
         else:
-            # Show MASTERED state — processing active
             self.btn_mastered.setStyleSheet(
                 "QPushButton { background: #48CAE4; color: #0A0A0C; border: none; "
                 "border-radius: 12px; font-size: 10px; font-weight: bold; font-family: 'Menlo', monospace; }"
@@ -8492,38 +8494,49 @@ class LongPlayStudioV4(QMainWindow):
                 "border-radius: 12px; font-size: 10px; font-weight: bold; font-family: 'Menlo', monospace; }"
                 "QPushButton:hover { color: #FFB340; }")
 
-        # Bypass RT engine processing
-        if self._rt_engine and self._rt_active:
-            try:
-                # Bypass all DSP modules
-                self._rt_engine.set_eq_bypass(is_original)
-                if hasattr(self._rt_engine, 'set_dyn_bypass'):
-                    self._rt_engine.set_dyn_bypass(is_original)
-                if hasattr(self._rt_engine, 'set_res_bypass'):
-                    self._rt_engine.set_res_bypass(is_original)
-                if hasattr(self._rt_engine, 'set_limiter_bypass'):
-                    self._rt_engine.set_limiter_bypass(is_original)
-                # Set gain to 0 when bypassed
-                if is_original:
-                    self._rt_engine.set_gain(0.0)
-                    self._rt_engine.set_width(100)
-                else:
-                    # Restore current settings
-                    gain_db = getattr(self, '_right_gain_db', 0.0)
-                    self._rt_engine.set_gain(gain_db)
-                    width = int(self.right_width_dial.value()) if hasattr(self, 'right_width_dial') else 100
-                    self._rt_engine.set_width(width)
-            except Exception as e:
-                print(f"[BYPASS] RT bypass error: {e}")
+        # Get current playback state before switching
+        try:
+            was_playing = getattr(self.audio_player, 'is_playing', False)
+            current_pos = self.audio_player.player.position() if hasattr(self.audio_player, 'player') else 0
+        except Exception:
+            was_playing = False
+            current_pos = 0
 
-        # Also handle QMediaPlayer bypass (dual-player A/B)
-        if hasattr(self, '_is_bypass_mode'):
-            self._is_bypass_mode = is_original
-            if hasattr(self, '_on_transport_bypass'):
-                try:
-                    self._on_transport_bypass(is_original)
-                except Exception:
-                    pass
+        if is_original:
+            # ── ORIGINAL: switch back to original file ──
+            original_file = None
+            if hasattr(self, 'audio_engine') and hasattr(self.audio_engine, '_current_file'):
+                original_file = self.audio_engine._current_file
+            elif hasattr(self, 'audio_player') and self.audio_player.files:
+                idx = self.audio_player.current_file_index
+                if 0 <= idx < len(self.audio_player.files):
+                    original_file = self.audio_player.files[idx]
+
+            if original_file and os.path.exists(original_file):
+                self.audio_player.player.stop()
+                self.audio_player.player.setSource(QUrl.fromLocalFile(original_file))
+                # Reset QAudioOutput volume to 1.0 (no gain)
+                if hasattr(self.audio_player, 'audio_output'):
+                    self.audio_player.audio_output.setVolume(1.0)
+                QTimer.singleShot(50, lambda: self._restore_after_gain(current_pos, was_playing))
+                print(f"[BYPASS] → ORIGINAL: {os.path.basename(original_file)}")
+            else:
+                print("[BYPASS] ⚠️ No original file found")
+
+        else:
+            # ── MASTERED: process audio and play mastered version ──
+            # Use _apply_realtime_preview which processes + hot-swaps
+            gain_db = getattr(self, '_right_gain_db', 0.0)
+            if gain_db < 0.01:
+                # If gain is 0, apply a minimal processing to hear the chain
+                # Force trigger with current settings
+                pass
+            self._trigger_master_rerender()
+            # Also apply QAudioOutput volume for immediate feedback
+            volume = max(0.5, min(3.0, 0.5 + gain_db / 20.0 * 2.5))
+            if hasattr(self.audio_player, 'audio_output'):
+                self.audio_player.audio_output.setVolume(volume)
+            print(f"[BYPASS] → MASTERED (gain={gain_db:.1f}dB)")
 
         mode_str = "ORIGINAL" if is_original else "MASTERED"
         print(f"[BYPASS] Switched to {mode_str}")
