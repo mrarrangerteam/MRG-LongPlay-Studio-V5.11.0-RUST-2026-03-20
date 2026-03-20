@@ -8714,13 +8714,16 @@ class LongPlayStudioV4(QMainWindow):
                             processed = _RealAudioProcessor.process_maximizer(
                                 processed, sr, chain.maximizer, 1.0)
 
-                        # Ceiling hard clip
+                        # V5.11.0 FIX: True Peak Limiter as FINAL step
+                        # np.clip only catches sample peaks — True Peak (inter-sample) can be +3dB higher!
                         ceiling = self.right_ceiling_spin.value() if hasattr(self, 'right_ceiling_spin') else -1.0
-                        ceiling_lin = np.float32(10 ** (ceiling / 20.0))
-                        np.clip(processed, -ceiling_lin, ceiling_lin, out=processed)
+                        processed = _RealAudioProcessor.final_true_peak_limit(
+                            processed, sr, ceiling_db=ceiling)
 
                         _sf.write(temp_path, processed, sr, subtype='FLOAT')
-                        print(f"[A/B] Mastered rendered (FULL CHAIN): peak={np.max(np.abs(processed)):.4f}")
+                        actual_peak = np.max(np.abs(processed))
+                        actual_peak_db = 20 * np.log10(actual_peak + 1e-10)
+                        print(f"[A/B] Mastered rendered (FULL CHAIN): peak={actual_peak_db:.1f}dBTP")
 
                         # Hot-swap on main thread
                         def _swap():
@@ -9597,9 +9600,14 @@ class LongPlayStudioV4(QMainWindow):
                             except Exception as e:
                                 print(f"[COMPRESS] Error: {e}")
 
-                    # 3. Apply ceiling limiter (brick-wall)
-                    ceiling_linear = np.float32(10 ** (ceiling / 20.0))
-                    np.clip(processed, -ceiling_linear, ceiling_linear, out=processed)
+                    # 3. V5.11.0 FIX: True Peak limiter (not just sample clip)
+                    try:
+                        from modules.master.chain import _RealAudioProcessor
+                        processed = _RealAudioProcessor.final_true_peak_limit(
+                            processed, sr, ceiling_db=ceiling)
+                    except Exception:
+                        ceiling_linear = np.float32(10 ** (ceiling / 20.0))
+                        np.clip(processed, -ceiling_linear, ceiling_linear, out=processed)
 
                     # 4. Write to temp WAV (float32 for speed)
                     sf = self.audio_engine._sf
@@ -12533,7 +12541,13 @@ class LongPlayStudioV4(QMainWindow):
                     sf = self.audio_engine._sf
                     audio_data, sr = sf.read(mixed_audio, dtype='float32')
                     audio_data = audio_data * gain_linear
-                    audio_data = np.clip(audio_data, -ceiling_linear, ceiling_linear)
+                    # V5.11.0 FIX: True Peak limiter
+                    try:
+                        from modules.master.chain import _RealAudioProcessor
+                        audio_data = _RealAudioProcessor.final_true_peak_limit(
+                            audio_data, sr, ceiling_db=ceiling_db)
+                    except Exception:
+                        audio_data = np.clip(audio_data, -ceiling_linear, ceiling_linear)
                     gained_path = os.path.join(temp_dir, "mixed_audio_gained.wav")
                     sf.write(gained_path, audio_data, sr, subtype='PCM_24')
                     mixed_audio = gained_path
