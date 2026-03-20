@@ -7685,6 +7685,26 @@ class LongPlayStudioV4(QMainWindow):
         irc_row.addWidget(self.right_irc_combo, 1)
         layout.addLayout(irc_row)
 
+        # V5.11.0: IRC Description label — tells user what each mode does
+        self.right_irc_desc = QLabel("")
+        self.right_irc_desc.setWordWrap(True)
+        self.right_irc_desc.setStyleSheet(
+            "color: #6B6B70; font-style: italic; font-size: 8px; "
+            "padding: 1px 4px; font-family: 'Menlo', sans-serif;")
+        layout.addWidget(self.right_irc_desc)
+        self._update_irc_description("IRC 2")
+
+        # Add tooltips to IRC combo items
+        irc_tooltips = {
+            "IRC 1": "Transparent — สะอาด ไม่แต่งสี\nดีที่สุดสำหรับ Acoustic, Jazz, Classical",
+            "IRC 2": "Adaptive — Release ปรับตามเพลงอัตโนมัติ\nAll-purpose mastering ใช้ได้กับทุกแนว",
+            "IRC 3": "Multi-band — แยก 3 ย่านความถี่ limit แยกกัน\nเก็บ bass ไม่ให้กระทบ treble (แนะนำ Pop/Rock)",
+            "IRC 4": "Saturation + Limiting — เสียงอุ่น ดังมาก\nเหมาะกับ EDM, Hip-Hop, เพลงที่ต้องการดังสุดๆ",
+            "IRC 5": "Maximum Density — อัดแน่นที่สุด\nCompression + Multi-band limit (Ozone 12 exclusive)",
+            "IRC LL": "Low Latency — ไม่มี look-ahead\nสำหรับ monitor real-time ขณะ mixing",
+        }
+        self.right_irc_combo.setToolTip(irc_tooltips.get("IRC 2", ""))
+
         # ── IRC Sub-mode dropdown (IRC 3: Pumping/Balanced/Crisp/Clipping, IRC 4: Classic/Modern/Transient) ──
         self.right_irc_submode_row = QHBoxLayout()
         self.right_irc_submode_row.setSpacing(4)
@@ -8724,8 +8744,36 @@ class LongPlayStudioV4(QMainWindow):
         mode_str = "ORIGINAL" if is_original else "MASTERED"
         print(f"[BYPASS] Switched to {mode_str}")
 
+    def _update_irc_description(self, mode_name: str):
+        """V5.11.0: Update IRC description label + tooltip to show what each mode does."""
+        if not hasattr(self, 'right_irc_desc'):
+            return
+
+        # Full descriptions with Thai + English
+        irc_info = {
+            "IRC 1": ("🎵 Transparent — สะอาด ไม่แต่งสีเสียง",
+                       "ดีที่สุดสำหรับ Acoustic, Jazz, Classical\nLook-ahead 10ms, Release 200ms"),
+            "IRC 2": ("🎶 Adaptive — Release ปรับตามเพลงอัตโนมัติ",
+                       "All-purpose mastering ใช้ได้กับทุกแนวเพลง\nProgram-dependent release"),
+            "IRC 3": ("🔊 Multi-band — แยก Low/Mid/High limit แยกกัน",
+                       "Bass ไม่กระทบ Treble เหมาะกับ Pop, Rock, R&B\nSub-modes: Pumping, Balanced, Crisp, Clipping"),
+            "IRC 4": ("🔥 Saturation + Limiting — เสียงอุ่น ดังมาก!",
+                       "Harmonic saturation + multiband limit\nเหมาะกับ EDM, Hip-Hop, Trap — ดังสุดๆ\nSub-modes: Classic, Modern, Transient"),
+            "IRC 5": ("💎 Maximum Density — อัดแน่นที่สุด",
+                       "Heavy compression 3:1 + multi-band limit\nOzone 12 exclusive — เพิ่ม density สูงสุด"),
+            "IRC LL": ("⚡ Low Latency — ไม่มี look-ahead",
+                        "สำหรับ real-time monitoring ขณะ mixing\nFast response, zero latency"),
+        }
+
+        desc_text, tooltip = irc_info.get(mode_name, ("", ""))
+        self.right_irc_desc.setText(desc_text)
+        self.right_irc_combo.setToolTip(tooltip)
+
     def _on_right_irc_mode_changed(self, mode_name: str):
         """V5.7: IRC mode changed — update sub-mode, sync to chain, trigger re-render."""
+        # V5.11.0: Update description for user
+        self._update_irc_description(mode_name)
+
         if _HAS_PRESETS:
             sub_modes = get_irc_sub_modes(mode_name)
             if sub_modes:
