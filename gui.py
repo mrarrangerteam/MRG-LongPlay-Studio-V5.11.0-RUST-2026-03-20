@@ -8547,11 +8547,8 @@ class LongPlayStudioV4(QMainWindow):
                 print("[BYPASS] ⚠️ No original file found")
 
         else:
-            # ── MASTERED: play processed version ──
+            # ── MASTERED: render + play processed version ──
             gain_db = getattr(self, '_right_gain_db', 0.0)
-
-            # Strategy 1: Check if chain already rendered a mastered file
-            mastered_file = None
             original_file = None
             if hasattr(self, 'audio_engine') and hasattr(self.audio_engine, '_current_file'):
                 original_file = self.audio_engine._current_file
@@ -8560,33 +8557,74 @@ class LongPlayStudioV4(QMainWindow):
                 if 0 <= idx < len(self.audio_player.files):
                     original_file = self.audio_player.files[idx]
 
-            if original_file:
-                base, ext = os.path.splitext(original_file)
-                candidate = f"{base}_mastered{ext}"
-                if os.path.exists(candidate):
-                    mastered_file = candidate
+            if not original_file or not os.path.exists(original_file):
+                print("[A/B] No audio file loaded")
+                return
 
-            # Strategy 2: Check if _apply_realtime_preview created a temp preview
-            if not mastered_file and hasattr(self, '_gained_preview_path'):
-                if self._gained_preview_path and os.path.exists(self._gained_preview_path):
-                    mastered_file = self._gained_preview_path
+            # Always render mastered version (even if gain=0)
+            import threading, tempfile
+            try:
+                import soundfile as _sf
+                import numpy as np
 
-            if mastered_file:
-                # Direct switch to existing mastered file
-                self.audio_player.player.stop()
-                self.audio_player.player.setSource(QUrl.fromLocalFile(mastered_file))
-                volume = max(0.5, min(3.0, 0.5 + gain_db / 20.0 * 2.5))
-                if hasattr(self.audio_player, 'audio_output'):
-                    self.audio_player.audio_output.setVolume(volume)
-                QTimer.singleShot(50, lambda: self._restore_after_gain(current_pos, was_playing))
-                print(f"[A/B] Switching to mastered: {os.path.basename(mastered_file)}")
-            else:
-                # No mastered file yet — trigger render + hot-swap
-                self._trigger_master_rerender()
-                volume = max(0.5, min(3.0, 0.5 + gain_db / 20.0 * 2.5))
-                if hasattr(self.audio_player, 'audio_output'):
-                    self.audio_player.audio_output.setVolume(volume)
-                print(f"[A/B] Rendering mastered preview (gain={gain_db:.1f}dB)")
+                temp_dir = os.path.join(tempfile.gettempdir(), "longplay_ab")
+                os.makedirs(temp_dir, exist_ok=True)
+                temp_path = os.path.join(temp_dir, "mastered_ab.wav")
+
+                def _render_mastered():
+                    try:
+                        audio, sr = _sf.read(original_file, dtype='float32')
+                        if audio.ndim == 1:
+                            audio = np.column_stack([audio, audio])
+
+                        from modules.master.chain import _RealAudioProcessor
+                        chain = self._get_right_panel_chain()
+                        processed = audio.copy()
+
+                        # Apply gain
+                        if gain_db > 0.01:
+                            processed = processed * np.float32(10 ** (gain_db / 20.0))
+
+                        # Apply maximizer chain (soft clip + IRC limit + ceiling)
+                        if chain and hasattr(chain, 'maximizer'):
+                            processed = _RealAudioProcessor.process_maximizer(
+                                processed, sr, chain.maximizer, 1.0)
+
+                        # Ceiling hard clip
+                        ceiling = self.right_ceiling_spin.value() if hasattr(self, 'right_ceiling_spin') else -1.0
+                        ceiling_lin = np.float32(10 ** (ceiling / 20.0))
+                        np.clip(processed, -ceiling_lin, ceiling_lin, out=processed)
+
+                        _sf.write(temp_path, processed, sr, subtype='FLOAT')
+                        print(f"[A/B] Mastered rendered: peak={np.max(np.abs(processed)):.4f}")
+
+                        # Hot-swap on main thread
+                        def _swap():
+                            try:
+                                swap_pos = self.audio_player.player.position()
+                                swap_playing = self.audio_player.is_playing
+                                self.audio_player.player.stop()
+                                self.audio_player.player.setSource(QUrl.fromLocalFile(temp_path))
+                                self._gained_preview_active = True
+                                self._gained_preview_path = temp_path
+                                vol = max(0.5, min(3.0, 0.5 + gain_db / 20.0 * 2.5))
+                                if hasattr(self.audio_player, 'audio_output'):
+                                    self.audio_player.audio_output.setVolume(vol)
+                                QTimer.singleShot(50, lambda: self._restore_after_gain(swap_pos, swap_playing))
+                                print(f"[A/B] Switched to MASTERED")
+                            except Exception as e:
+                                print(f"[A/B] Swap error: {e}")
+                        QTimer.singleShot(0, _swap)
+
+                    except Exception as e:
+                        print(f"[A/B] Render error: {e}")
+                        import traceback; traceback.print_exc()
+
+                threading.Thread(target=_render_mastered, daemon=True).start()
+                print(f"[A/B] Rendering mastered (gain={gain_db:.1f}dB)...")
+
+            except Exception as e:
+                print(f"[A/B] Error: {e}")
 
         mode_str = "ORIGINAL" if is_original else "MASTERED"
         print(f"[BYPASS] Switched to {mode_str}")
