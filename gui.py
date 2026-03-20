@@ -8978,6 +8978,14 @@ class LongPlayStudioV4(QMainWindow):
         ceiling = self.right_ceiling_spin.value() if hasattr(self, 'right_ceiling_spin') else -1.0
 
         # Extract from forwarded levels dict (same keys as chain._send_meter())
+        # Per-stage data available for targeted panel feeds
+        stage_data = levels.get('_stage_data', {})
+
+        # Use post_maximizer data for maximizer panel, final for general
+        max_data = stage_data.get('post_maximizer', stage_data.get('final', levels))
+        dyn_data = stage_data.get('post_dynamics', levels)
+        img_data = stage_data.get('post_imager', levels)
+
         peak_l = levels.get('left_peak_db', -60.0)
         peak_r = levels.get('right_peak_db', -60.0)
         gr_db = levels.get('gain_reduction_db', 0.0)
@@ -8992,20 +9000,23 @@ class LongPlayStudioV4(QMainWindow):
             if hasattr(self, 'right_irc_mode'):
                 idx = self.right_irc_mode.currentIndex() if hasattr(self.right_irc_mode, 'currentIndex') else 0
                 irc_text = f"IRC {idx + 1}"
+            mp_l = max_data.get('left_peak_db', peak_l)
+            mp_r = max_data.get('right_peak_db', peak_r)
+            mp_gr = max_data.get('gain_reduction_db', gr_db)
             p.update_meter(
-                gain_reduction_db=gr_db,
-                output_peak_l=peak_l, output_peak_r=peak_r,
+                gain_reduction_db=mp_gr,
+                output_peak_l=mp_l, output_peak_r=mp_r,
                 lufs=lufs, ceiling=ceiling, irc_mode=irc_text,
                 gain_db=gain_db,
-                true_peak=max(peak_l, peak_r),
+                true_peak=max(mp_l, mp_r),
             )
 
         # Imager panel
         p = self._meter_panels.get("imager")
         if p and p.isVisible():
-            vl = levels.get('left_rms_db', 0.0)
-            vr = levels.get('right_rms_db', 0.0)
-            corr = levels.get('correlation', 1.0)
+            vl = img_data.get('left_rms_db', levels.get('left_rms_db', 0.0))
+            vr = img_data.get('right_rms_db', levels.get('right_rms_db', 0.0))
+            corr = img_data.get('correlation', levels.get('correlation', 1.0))
             p.update_meter(
                 width=int(width_val),
                 correlation=corr,
@@ -9034,11 +9045,11 @@ class LongPlayStudioV4(QMainWindow):
         # Compressor panel
         p = self._meter_panels.get("compressor")
         if p and p.isVisible():
-            comp_gr = gr_db if compress_amt > 0 else 0.0
+            comp_gr = dyn_data.get('gain_reduction_db', gr_db) if compress_amt > 0 else 0.0
             p.update_meter(
                 gain_reduction_db=comp_gr,
-                band_gr_low=levels.get('band_gr_low', 0.0),
-                band_gr_mid=levels.get('band_gr_mid', 0.0),
+                band_gr_low=dyn_data.get('band_gr_low', 0.0),
+                band_gr_mid=dyn_data.get('band_gr_mid', 0.0),
                 band_gr_high=rt_data.get('band_gr_high', 0.0),
             )
 

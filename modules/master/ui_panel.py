@@ -7521,9 +7521,14 @@ class MasterPanel(QWidget):
             self.live_stage_label.setText(f"STAGE: {stage_names[stage]}")
 
         # V5.10.5: Forward meter data to popup panels (gui.py hook)
+        # Send latest entry + chain's per-stage data for full coverage
         if hasattr(self, '_popup_meter_forward') and self._popup_meter_forward:
             try:
-                self._popup_meter_forward(latest)
+                fwd = dict(latest)
+                # Merge per-stage data from chain if available
+                if hasattr(self, 'chain') and hasattr(self.chain, 'stage_meter_data'):
+                    fwd['_stage_data'] = self.chain.stage_meter_data.copy()
+                self._popup_meter_forward(fwd)
             except Exception:
                 pass
 

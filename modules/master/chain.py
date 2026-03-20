@@ -889,6 +889,9 @@ class MasterChain:
         self._progress_callback = None
         self._meter_lock = threading.Lock()
 
+        # V5.10.5: Per-stage meter data for popup panels
+        self.stage_meter_data = {}
+
         # Check capabilities
         self._use_real_processing = HAS_SOUNDFILE and (HAS_PEDALBOARD or HAS_SCIPY)
         if self._use_real_processing:
@@ -1235,6 +1238,9 @@ class MasterChain:
                         levels["lufs_integrated"] = -70.0
                         levels["lufs"] = -70.0
                         levels["lu_range"] = 0.0
+
+                # V5.10.5: Store per-stage data for popup panels
+                self.stage_meter_data[stage] = levels
 
                 with self._meter_lock:
                     self._meter_callback(levels)
