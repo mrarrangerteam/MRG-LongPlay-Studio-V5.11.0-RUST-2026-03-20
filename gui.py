@@ -7723,7 +7723,7 @@ class LongPlayStudioV4(QMainWindow):
         self.right_width_dial = OzoneRotaryKnob(
             name="WIDTH", min_val=0.0, max_val=200.0, default=100.0,
             unit="%", decimals=0)
-        self.right_width_dial.setFixedSize(55, 55)
+        self.right_width_dial.setFixedSize(70, 70)
         self.right_width_dial.valueChanged.connect(
             lambda v: self._on_right_width_changed(int(v)))
         knobs_section.addWidget(self.right_width_dial, alignment=Qt.AlignmentFlag.AlignCenter)
@@ -7738,7 +7738,7 @@ class LongPlayStudioV4(QMainWindow):
         self.right_soothe_knob = OzoneRotaryKnob(
             name="SOOTHE", min_val=0.0, max_val=100.0, default=0.0,
             unit="%", decimals=0)
-        self.right_soothe_knob.setFixedSize(55, 55)
+        self.right_soothe_knob.setFixedSize(70, 70)
         self.right_soothe_knob.valueChanged.connect(self._on_soothe_knob_changed)
         knobs_section.addWidget(self.right_soothe_knob, alignment=Qt.AlignmentFlag.AlignCenter)
 
@@ -7746,7 +7746,7 @@ class LongPlayStudioV4(QMainWindow):
         self.right_compress_knob = OzoneRotaryKnob(
             name="COMPRESS", min_val=0.0, max_val=100.0, default=0.0,
             unit="%", decimals=0)
-        self.right_compress_knob.setFixedSize(55, 55)
+        self.right_compress_knob.setFixedSize(70, 70)
         self.right_compress_knob.valueChanged.connect(self._on_compress_knob_changed)
         knobs_section.addWidget(self.right_compress_knob, alignment=Qt.AlignmentFlag.AlignCenter)
 
@@ -7754,7 +7754,7 @@ class LongPlayStudioV4(QMainWindow):
         self.right_gain_dial = OzoneRotaryKnob(
             name="GAIN", min_val=0.0, max_val=20.0, default=0.0,
             unit="dB", decimals=1)
-        self.right_gain_dial.setFixedSize(55, 55)
+        self.right_gain_dial.setFixedSize(70, 70)
         self.right_gain_dial.valueChanged.connect(
             lambda v: self._on_right_gain_changed(int(v * 10)))
         knobs_section.addWidget(self.right_gain_dial, alignment=Qt.AlignmentFlag.AlignCenter)
@@ -7782,6 +7782,37 @@ class LongPlayStudioV4(QMainWindow):
         knobs_section.addLayout(display_col)
 
         layout.addLayout(knobs_section)
+
+        # ── Right-click on knobs → popup Ozone 12-style meter panels ──
+        from modules.master.meter_panels import (
+            MaximizerMeterPanel, ImagerMeterPanel,
+            CompressorMeterPanel, SootheMeterPanel
+        )
+        self._meter_panels = {}  # track open panels by name
+
+        def _toggle_meter_panel(knob_widget, panel_cls, panel_key):
+            """Toggle popup meter panel on right-click"""
+            if panel_key in self._meter_panels and self._meter_panels[panel_key].isVisible():
+                self._meter_panels[panel_key].close()
+                del self._meter_panels[panel_key]
+                return
+            panel = panel_cls(parent=self)
+            # Position near the knob
+            pos = knob_widget.mapToGlobal(knob_widget.rect().bottomLeft())
+            panel.move(pos.x() - 40, pos.y() + 8)
+            panel.closed.connect(lambda k=panel_key: self._meter_panels.pop(k, None))
+            self._meter_panels[panel_key] = panel
+            panel.show()
+
+        for knob, cls, key in [
+            (self.right_width_dial,    ImagerMeterPanel,     "imager"),
+            (self.right_soothe_knob,   SootheMeterPanel,     "soothe"),
+            (self.right_compress_knob, CompressorMeterPanel, "compressor"),
+            (self.right_gain_dial,     MaximizerMeterPanel,  "maximizer"),
+        ]:
+            knob.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+            knob.customContextMenuRequested.connect(
+                lambda _pos, w=knob, c=cls, k=key: _toggle_meter_panel(w, c, k))
 
         # ── OUTPUT Ceiling ──
         output_row = QHBoxLayout()
