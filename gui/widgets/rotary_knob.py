@@ -157,6 +157,7 @@ class RotaryKnob(QWidget):
             self._dragging = True
             self._drag_start_y = event.position().y()
             self._drag_start_val = self._value
+        super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event) -> None:  # noqa: N802
         if self._dragging:
@@ -164,9 +165,11 @@ class RotaryKnob(QWidget):
             sensitivity = (self._max - self._min) / 200.0
             new_val = self._drag_start_val + dy * sensitivity
             self.value = round(new_val / self._step) * self._step
+        super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event) -> None:  # noqa: N802
         self._dragging = False
+        super().mouseReleaseEvent(event)
 
     def mouseDoubleClickEvent(self, event) -> None:  # noqa: N802
         self.value = self._default
@@ -177,3 +180,4 @@ class RotaryKnob(QWidget):
             self.value = self._value + self._step
         elif delta < 0:
             self.value = self._value - self._step
+        super().wheelEvent(event)

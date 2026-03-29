@@ -3,6 +3,10 @@ Waves WLM Plus Exact Clone — professional loudness meter widget.
 
 Story 4.2 — Epic 4: Pro Mastering.
 
+NOTE: Qt6 handles DPI scaling automatically via its high-DPI support.
+Pixel values in this file do not need manual DPI adjustment — Qt6's
+anti-aliased rendering and automatic scaling handle this correctly.
+
 Features:
     - Teal-to-dark gradient background
     - Green/yellow/red LED-segment meters

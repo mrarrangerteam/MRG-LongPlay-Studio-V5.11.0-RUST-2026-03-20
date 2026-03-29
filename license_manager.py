@@ -130,7 +130,7 @@ def validate_serial_key(serial: str) -> tuple[bool, str]:
         # Backward compatibility: check if key is stored in license file
         stored = load_license()
         stored_serial = stored.get("serial", stored.get("serial_key", ""))
-        if stored_serial.upper() == serial:
+        if hmac.compare_digest(stored_serial.upper().encode(), serial.upper().encode()):
             pass  # Allow previously activated legacy keys
         else:
             return False, "Invalid serial key - signature verification failed"

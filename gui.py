@@ -1259,6 +1259,12 @@ class AudioAnalysisEngine:
         self._gain_linear = 1.0
         self._ceiling_linear = 10 ** (-1.0 / 20.0)  # -1.0 dBTP default
         self._has_soundfile = False
+
+    # V5.11.0 FIX (BUG-GUI-010): Safe accessor for _current_data
+    @property
+    def has_audio(self) -> bool:
+        """Check if audio data is loaded and available."""
+        return self._current_data is not None and self._has_soundfile
         try:
             import soundfile as sf
             self._sf = sf
@@ -1750,6 +1756,7 @@ class VideoThread(QThread):
 
     def __init__(self, video_path: str = None):
         super().__init__()
+        import threading
         self.video_path = video_path
         self._run_flag = False
         self._pause_flag = False
@@ -1757,11 +1764,13 @@ class VideoThread(QThread):
         self._seek_position = -1
         self.duration_ms = 0
         self.current_position_ms = 0
+        self._state_lock = threading.Lock()
 
     def set_video(self, path: str):
         """Set video path and prepare for playback"""
-        self.video_path = path
-        self._seek_position = 0
+        with self._state_lock:
+            self.video_path = path
+            self._seek_position = 0
 
     def set_speed(self, speed: float):
         """Set playback speed"""
@@ -1769,7 +1778,8 @@ class VideoThread(QThread):
 
     def seek(self, position_ms: int):
         """Seek to position"""
-        self._seek_position = position_ms
+        with self._state_lock:
+            self._seek_position = position_ms
 
     def run(self):
         """No-op stub - rendering handled by VideoPreviewCard's QTimer"""
@@ -2459,9 +2469,14 @@ class VideoPreviewCard(QFrame):
             print(f"[GIF setGIF] Step 5: OK")
 
             # Start animation timer (~12 FPS for GIF)
+            # V5.11.0 FIX (BUG-GUI-007): Reuse existing timer instead of creating new one
+            # to prevent orphaned QTimer objects from accumulating on repeated setGIF calls
             print(f"[GIF setGIF] Step 6: Starting animation timer...")
-            self._gif_timer = QTimer(self)
-            self._gif_timer.timeout.connect(self._cycle_gif_frame)
+            if not hasattr(self, '_gif_timer') or self._gif_timer is None:
+                self._gif_timer = QTimer(self)
+                self._gif_timer.timeout.connect(self._cycle_gif_frame)
+            else:
+                self._gif_timer.stop()
             self._gif_timer.start(83)  # ~12fps
 
             print(f"[GIF setGIF] DONE: {len(self._gif_frames)} frames loaded")
@@ -2486,8 +2501,8 @@ class VideoPreviewCard(QFrame):
             self._gif_frame_idx = (self._gif_frame_idx + 1) % len(self._gif_frames)
             pixmap = QPixmap.fromImage(self._gif_frames[self._gif_frame_idx])
             self.gif_label.setPixmap(pixmap)
-        except Exception:
-            pass  # Silently skip frame on error
+        except Exception as e:
+            print(f"[GIF] Frame error: {e}")
 
     def _toggle_play(self):
         if self.is_playing:
@@ -2622,6 +2637,14 @@ class VideoPreviewCard(QFrame):
 
     def _open_detached_window(self):
         """Open floating detached video window"""
+        # V5.11.0 FIX (BUG-GUI-008): Disconnect old signals before creating new window
+        # to prevent duplicate connections when toggling detached window multiple times
+        if self.detached_window is not None:
+            try:
+                self.detached_window.dock_btn.clicked.disconnect(self._close_detached_window)
+                self.detached_window.closed.disconnect(self._on_detached_window_closed)
+            except (TypeError, RuntimeError):
+                pass  # Not connected or already deleted
         self.detached_window = DetachedVideoWindow()
         self.detached_window.dock_btn.clicked.connect(self._close_detached_window)
         self.detached_window.closed.connect(self._on_detached_window_closed)
@@ -3172,38 +3195,41 @@ class TimelineCanvas(QWidget):
             
     def paintEvent(self, event):
         painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        
-        w = self.width()
-        h = self.height()
-        
-        # Background
-        painter.fillRect(self.rect(), QColor(Colors.BG_PRIMARY))
-        
-        # Draw ruler
-        self._draw_ruler(painter, w)
-        
-        y_offset = self.ruler_height
-        
-        # Draw GIF track (top)
-        y_offset = self._draw_track_background(painter, y_offset, w, "GIF", Colors.GIF_COLOR)
-        if self.gif_tracks:
-            self._draw_media_bar(painter, y_offset - self.track_height + 5, w, 
-                                self.gif_tracks, Colors.GIF_COLOR, loop=True)
-        
-        # Draw Video track
-        y_offset = self._draw_track_background(painter, y_offset, w, "Video", Colors.VIDEO_COLOR)
-        if self.video_tracks:
-            self._draw_media_bar(painter, y_offset - self.track_height + 5, w,
-                                self.video_tracks, Colors.VIDEO_COLOR, loop=True)
-        
-        # Draw Audio tracks (staircase)
-        for i, audio in enumerate(self.audio_tracks):
-            y_offset = self._draw_track_background(painter, y_offset, w, f"Audio {i+1}", Colors.AUDIO_COLOR)
-            self._draw_audio_staircase(painter, y_offset - self.track_height + 5, w, audio, i)
-        
-        # Draw playhead
-        self._draw_playhead(painter, h)
+        try:
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+            w = self.width()
+            h = self.height()
+
+            # Background
+            painter.fillRect(self.rect(), QColor(Colors.BG_PRIMARY))
+
+            # Draw ruler
+            self._draw_ruler(painter, w)
+
+            y_offset = self.ruler_height
+
+            # Draw GIF track (top)
+            y_offset = self._draw_track_background(painter, y_offset, w, "GIF", Colors.GIF_COLOR)
+            if self.gif_tracks:
+                self._draw_media_bar(painter, y_offset - self.track_height + 5, w,
+                                    self.gif_tracks, Colors.GIF_COLOR, loop=True)
+
+            # Draw Video track
+            y_offset = self._draw_track_background(painter, y_offset, w, "Video", Colors.VIDEO_COLOR)
+            if self.video_tracks:
+                self._draw_media_bar(painter, y_offset - self.track_height + 5, w,
+                                    self.video_tracks, Colors.VIDEO_COLOR, loop=True)
+
+            # Draw Audio tracks (staircase)
+            for i, audio in enumerate(self.audio_tracks):
+                y_offset = self._draw_track_background(painter, y_offset, w, f"Audio {i+1}", Colors.AUDIO_COLOR)
+                self._draw_audio_staircase(painter, y_offset - self.track_height + 5, w, audio, i)
+
+            # Draw playhead
+            self._draw_playhead(painter, h)
+        finally:
+            painter.end()
         
     def _draw_ruler(self, painter, w):
         """Draw time ruler"""
@@ -3730,9 +3756,12 @@ class CapCutTimeline(QWidget):
                 self.scroll_offset = int(self.scroll_offset + (new_scroll - self.scroll_offset) * 0.3)
                 self.canvas.setScrollOffset(self.scroll_offset)
 
+                # V5.11.0 FIX (BUG-GUI-009): try/finally to guarantee unblock
                 self.scrollbar.blockSignals(True)
-                self.scrollbar.setValue(int((self.scroll_offset / max_scroll) * 1000))
-                self.scrollbar.blockSignals(False)
+                try:
+                    self.scrollbar.setValue(int((self.scroll_offset / max_scroll) * 1000))
+                finally:
+                    self.scrollbar.blockSignals(False)
                 
     def setPlaying(self, playing: bool):
         self.is_playing = playing
@@ -6750,7 +6779,48 @@ class LongPlayStudioV4(QMainWindow):
         self.main_splitter.widget(2).setMinimumWidth(180)  # Right min
         
         main_layout.addWidget(self.main_splitter)
-        
+
+    # V5.11.0 FIX (BUG-GUI-005): Stop all timers and cleanup on close
+    def closeEvent(self, event):
+        """Clean up all timers, threads, and audio engines before closing."""
+        # Stop all known QTimers
+        for attr_name in [
+            'timer', 'peak_hold_timer', 'update_timer', 'playhead_timer',
+            '_meter_panel_timer', '_rt_pos_timer', '_master_rerender_timer',
+            '_render_timer', 'export_timer', '_gif_timer',
+        ]:
+            timer = getattr(self, attr_name, None)
+            if timer is not None:
+                try:
+                    timer.stop()
+                except RuntimeError:
+                    pass  # C++ object already deleted
+
+        # Stop RT engine
+        if hasattr(self, '_rt_engine') and self._rt_engine is not None:
+            try:
+                self._rt_engine.stop()
+            except Exception:
+                pass
+            self._rt_engine = None
+
+        # Stop meter widget timers
+        if hasattr(self, 'meter') and self.meter is not None:
+            try:
+                self.meter.stop()
+            except (RuntimeError, Exception):
+                pass
+
+        # Stop audio player
+        if hasattr(self, 'audio_player') and self.audio_player is not None:
+            try:
+                if hasattr(self.audio_player, 'player'):
+                    self.audio_player.player.stop()
+            except (RuntimeError, Exception):
+                pass
+
+        super().closeEvent(event)
+
     def _create_left_sidebar(self, parent_scroll: QScrollArea):
         """Create left sidebar with media lists"""
         sidebar = QFrame()
@@ -7950,6 +8020,20 @@ class LongPlayStudioV4(QMainWindow):
         self.meter.set_audio_engine(self.audio_engine)
         self.meter.setVisible(False)  # Hidden — replaced by WavesWLMMeter visually
 
+        # BUG-THR-012: Eagerly initialize LUFS meter and buffers (was lazy in timer tick)
+        try:
+            import pyloudnorm as pyln
+            self._lufs_meter = pyln.Meter(48000)
+            self._lufs_meter_sr = 48000
+        except ImportError:
+            self._lufs_meter = None
+            self._lufs_meter_sr = 0
+        self._lufs_mom_buf = []          # 400ms audio buffer
+        self._lufs_short_buf_audio = []  # 3s audio buffer
+        self._lufs_int_blocks = []       # all gated blocks for integrated
+        self._lufs_short_history = []    # short-term history for LRA
+        self._lufs_integrated_val = -70.0
+
         # V5.10: Rust Real-Time DSP Engine (like Logic Pro / Ozone)
         # Replaces QMediaPlayer when mastering controls are active
         self._rt_engine = None
@@ -8150,20 +8234,8 @@ class LongPlayStudioV4(QMainWindow):
         if self.meter.is_playing:
             import math
 
-            # Initialize LUFS state
-            if not hasattr(self, '_lufs_meter'):
-                try:
-                    import pyloudnorm as pyln
-                    self._lufs_meter = pyln.Meter(48000)  # will update SR on first use
-                    self._lufs_meter_sr = 48000
-                except ImportError:
-                    self._lufs_meter = None
-                    self._lufs_meter_sr = 0
-                self._lufs_mom_buf = []          # 400ms audio buffer
-                self._lufs_short_buf_audio = []  # 3s audio buffer
-                self._lufs_int_blocks = []       # all gated blocks for integrated
-                self._lufs_short_history = []    # short-term history for LRA
-                self._lufs_integrated_val = -70.0
+            # BUG-THR-012: LUFS state now initialized eagerly after meter creation.
+            # This guard is kept only for safety if __init__ path was skipped.
 
             # Get raw audio samples from AudioAnalysisEngine
             has_audio_data = (hasattr(self, 'audio_engine') and
@@ -8660,6 +8732,11 @@ class LongPlayStudioV4(QMainWindow):
                 os.makedirs(temp_dir, exist_ok=True)
                 temp_path = os.path.join(temp_dir, "mastered_ab.wav")
 
+                # V5.11.0 FIX (BUG-THR-001): Capture chain + ceiling on main thread
+                # BEFORE spawning background thread — never access GUI widgets from worker
+                chain_snapshot = self._get_right_panel_chain()
+                ceiling_snapshot = self.right_ceiling_spin.value() if hasattr(self, 'right_ceiling_spin') else -1.0
+
                 def _render_mastered():
                     try:
                         audio, sr = _sf.read(original_file, dtype='float32')
@@ -8667,7 +8744,7 @@ class LongPlayStudioV4(QMainWindow):
                             audio = np.column_stack([audio, audio])
 
                         from modules.master.chain import _RealAudioProcessor
-                        chain = self._get_right_panel_chain()
+                        chain = chain_snapshot
                         processed = audio.copy()
 
                         # V5.10.6: Apply FULL chain (EQ → Dynamics → Soothe → Imager → Maximizer)
@@ -8716,9 +8793,8 @@ class LongPlayStudioV4(QMainWindow):
 
                         # V5.11.0 FIX: True Peak Limiter as FINAL step
                         # np.clip only catches sample peaks — True Peak (inter-sample) can be +3dB higher!
-                        ceiling = self.right_ceiling_spin.value() if hasattr(self, 'right_ceiling_spin') else -1.0
                         processed = _RealAudioProcessor.final_true_peak_limit(
-                            processed, sr, ceiling_db=ceiling)
+                            processed, sr, ceiling_db=ceiling_snapshot)
 
                         _sf.write(temp_path, processed, sr, subtype='FLOAT')
                         actual_peak = np.max(np.abs(processed))
@@ -8921,8 +8997,10 @@ class LongPlayStudioV4(QMainWindow):
             idx = self.right_irc_combo.findText(mx["irc_mode"])
             if idx >= 0:
                 self.right_irc_combo.blockSignals(True)
-                self.right_irc_combo.setCurrentIndex(idx)
-                self.right_irc_combo.blockSignals(False)
+                try:
+                    self.right_irc_combo.setCurrentIndex(idx)
+                finally:
+                    self.right_irc_combo.blockSignals(False)
 
         # Sync to Master Module if open
         if hasattr(self, '_master_window') and self._master_window is not None:
@@ -9117,7 +9195,7 @@ class LongPlayStudioV4(QMainWindow):
         Uses the same AudioAnalysisEngine that drives the working level meters.
         """
         # Need audio engine with loaded audio and active playback
-        if not hasattr(self, 'audio_engine') or self.audio_engine._current_data is None:
+        if not hasattr(self, 'audio_engine') or not self.audio_engine.has_audio:
             return None
         if not hasattr(self, 'audio_player') or not getattr(self.audio_player, 'is_playing', False):
             return None
@@ -9536,9 +9614,7 @@ class LongPlayStudioV4(QMainWindow):
                         QTimer.singleShot(50, lambda: self._restore_after_gain(current_pos, was_playing))
                 return
 
-            if not hasattr(self, 'audio_engine') or not self.audio_engine._has_soundfile:
-                return
-            if self.audio_engine._current_data is None:
+            if not hasattr(self, 'audio_engine') or not self.audio_engine.has_audio:
                 return
             if not hasattr(self, 'audio_player') or self.audio_player is None:
                 return
@@ -9559,6 +9635,11 @@ class LongPlayStudioV4(QMainWindow):
 
             ceiling = self.right_ceiling_spin.value() if hasattr(self, 'right_ceiling_spin') else -1.0
 
+            # V5.11.0 FIX (BUG-THR-002): Capture chain + GUI values on main thread
+            # before spawning background thread — avoid accessing widgets from worker
+            chain_snapshot = self._get_right_panel_chain()
+            dyn_amount_pct = self.right_dyn_amount.value() / 100.0 if hasattr(self, 'right_dyn_amount') else 0.3
+
             def _process_in_bg():
                 try:
                     import numpy as np
@@ -9566,9 +9647,11 @@ class LongPlayStudioV4(QMainWindow):
 
                     # 0. SOOTHE — Resonance Suppressor (before other processing)
                     if has_soothe:
-                        chain = self._get_right_panel_chain()
-                        if chain and hasattr(chain, 'resonance_suppressor') and chain.resonance_suppressor.enabled:
-                            processed = chain.resonance_suppressor.process(processed)
+                        try:
+                            if chain_snapshot and hasattr(chain_snapshot, 'resonance_suppressor') and chain_snapshot.resonance_suppressor.enabled:
+                                processed = chain_snapshot.resonance_suppressor.process(processed)
+                        except RuntimeError:
+                            print("[SOOTHE] Chain destroyed during processing, skipping")
 
                     # 1. Apply stereo width (M/S processing)
                     if width_pct != 100 and len(processed.shape) > 1 and processed.shape[1] >= 2:
@@ -9586,19 +9669,16 @@ class LongPlayStudioV4(QMainWindow):
 
                     # 2.5 COMPRESS — Dynamics (after gain, before ceiling)
                     if has_compress:
-                        chain = self._get_right_panel_chain()
-                        if chain and hasattr(chain, 'dynamics') and chain.dynamics.enabled:
-                            try:
+                        try:
+                            if chain_snapshot and hasattr(chain_snapshot, 'dynamics') and chain_snapshot.dynamics.enabled:
                                 from modules.master.resonance_suppressor import AutoDynamicProcessor
                                 auto_dyn = AutoDynamicProcessor(sr)
-                                pct = self.right_dyn_amount.value() / 100.0 if hasattr(self, 'right_dyn_amount') else 0.3
-                                targets = {0.0: "gentle", 0.5: "balanced", 1.0: "aggressive"}
-                                target = "gentle" if pct < 0.33 else ("balanced" if pct < 0.66 else "aggressive")
+                                target = "gentle" if dyn_amount_pct < 0.33 else ("balanced" if dyn_amount_pct < 0.66 else "aggressive")
                                 auto_dyn.set_target(target)
                                 auto_dyn.analyze(processed, sr)
                                 processed = auto_dyn.process(processed)
-                            except Exception as e:
-                                print(f"[COMPRESS] Error: {e}")
+                        except (RuntimeError, Exception) as e:
+                            print(f"[COMPRESS] Error: {e}")
 
                     # 3. V5.11.0 FIX: True Peak limiter (not just sample clip)
                     ceiling_linear = np.float32(10 ** (ceiling / 20.0))
@@ -14767,8 +14847,10 @@ class LicenseDialog(QDialog):
         
         if formatted != text:
             self.serial_input.blockSignals(True)
-            self.serial_input.setText(formatted)
-            self.serial_input.blockSignals(False)
+            try:
+                self.serial_input.setText(formatted)
+            finally:
+                self.serial_input.blockSignals(False)
     
     def _activate(self):
         """Validate and activate license"""

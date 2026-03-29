@@ -199,6 +199,9 @@ impl RtEngine {
         if band < 8 {
             self.params.eq_gains[band].store(gain_db.clamp(-12.0, 12.0));
             self.params.mark_dirty();
+        } else {
+            // BUG-RUST-008: warn on out-of-range band index (0-7 valid)
+            eprintln!("[longplay-rt] set_eq_gain: band {} out of range (0-7), ignored", band);
         }
     }
 
@@ -208,9 +211,10 @@ impl RtEngine {
         self.params.mark_dirty();
     }
 
-    /// Set output limiter ceiling.
+    /// Set output limiter ceiling in dBFS (-6.0 to -0.1).
     pub fn set_limiter_ceiling(&self, ceiling_db: f32) {
-        self.params.limiter_ceiling_db.store(ceiling_db);
+        // BUG-RUST-012: add clamp — was the only setter without range guard
+        self.params.limiter_ceiling_db.store(ceiling_db.clamp(-6.0, -0.1));
         self.params.mark_dirty();
     }
 

@@ -38,6 +38,28 @@ except ImportError:
     pass
 
 
+def _python_find_hooks(audio_data, sr):
+    """Pure Python fallback for hook detection using energy peaks.
+
+    Used when the Rust backend (_RUST_HOOKS) is unavailable.
+    Returns list of (time_sec, energy) tuples for detected hook candidates.
+    """
+    import numpy as np
+    # Simple energy-based hook detection
+    frame_size = int(sr * 0.5)  # 500ms frames
+    hop = frame_size // 2
+    energy = []
+    for i in range(0, len(audio_data) - frame_size, hop):
+        frame = audio_data[i:i + frame_size]
+        energy.append(np.sqrt(np.mean(frame ** 2)))
+    if not energy:
+        return []
+    energy = np.array(energy)
+    threshold = np.mean(energy) + np.std(energy)
+    peaks = np.where(energy > threshold)[0]
+    return [(p * hop / sr, energy[p]) for p in peaks]
+
+
 @dataclass
 class HookResult:
     """Result of hook extraction for a single audio file"""

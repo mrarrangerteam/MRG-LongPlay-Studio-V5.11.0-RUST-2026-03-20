@@ -154,9 +154,10 @@ class MultiTrackExporter:
     ) -> threading.Thread:
         """Run export in a background thread."""
         def _run() -> None:
+            from gui.utils.compat import QTimer
             result = self.export(project, output_path, format_preset, progress_callback)
             if done_callback is not None:
-                done_callback(result)
+                QTimer.singleShot(0, lambda r=result: done_callback(r))
 
         t = threading.Thread(target=_run, daemon=True)
         t.start()

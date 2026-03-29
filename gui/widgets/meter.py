@@ -71,12 +71,8 @@ class RealTimeMeter(QWidget):
             self.right_level = max(0.01, min(0.99, (r_db + 48.0) / 48.0))
             self._last_levels_db = levels
         else:
-            t = position_ms / 1000.0
-            base_l = 0.5 + 0.3 * math.sin(t * 2.5) + 0.1 * math.sin(t * 7.3)
-            base_r = 0.5 + 0.3 * math.sin(t * 2.7 + 0.5) + 0.1 * math.sin(t * 6.9)
-            variation = (position_ms % 100) / 500.0
-            self.left_level = max(0.1, min(0.95, base_l + variation))
-            self.right_level = max(0.1, min(0.95, base_r - variation * 0.5))
+            self.left_level = 0.0
+            self.right_level = 0.0
 
         if self.left_level > self.peak_left:
             self.peak_left = self.left_level
@@ -148,50 +144,53 @@ class RealTimeMeter(QWidget):
 
     def paintEvent(self, event):
         painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+        try:
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
 
-        w = self.width()
-        h = self.height()
+            w = self.width()
+            h = self.height()
 
-        painter.fillRect(self.rect(), QColor(Colors.BG_PRIMARY))
+            painter.fillRect(self.rect(), QColor(Colors.BG_PRIMARY))
 
-        db_width = 28
-        bar_width = (w - db_width - 60) // 2
-        meter_height = h - 50
-        meter_top = 15
+            db_width = 28
+            bar_width = (w - db_width - 60) // 2
+            meter_height = h - 50
+            meter_top = 15
 
-        left_bar_x = db_width + 15
-        right_bar_x = left_bar_x + bar_width + 15
+            left_bar_x = db_width + 15
+            right_bar_x = left_bar_x + bar_width + 15
 
-        painter.setPen(QColor(Colors.TEXT_TERTIARY))
-        painter.setFont(QFont("Inter", 7))
-        db_values = [(0, "0"), (-3, "-3"), (-6, "-6"), (-12, "-12"),
-                     (-18, "-18"), (-24, "-24"), (-36, "-36"), (-48, "-48")]
+            painter.setPen(QColor(Colors.TEXT_TERTIARY))
+            painter.setFont(QFont("Inter", 7))
+            db_values = [(0, "0"), (-3, "-3"), (-6, "-6"), (-12, "-12"),
+                         (-18, "-18"), (-24, "-24"), (-36, "-36"), (-48, "-48")]
 
-        for db_val, db_label in db_values:
-            if db_val == 0:
-                ratio = 0.0
-            else:
-                ratio = min(1.0, abs(db_val) / 48.0)
+            for db_val, db_label in db_values:
+                if db_val == 0:
+                    ratio = 0.0
+                else:
+                    ratio = min(1.0, abs(db_val) / 48.0)
 
-            y = meter_top + int(ratio * meter_height)
-            painter.drawText(5, y + 3, db_label)
-            painter.drawLine(db_width - 3, y, db_width, y)
+                y = meter_top + int(ratio * meter_height)
+                painter.drawText(5, y + 3, db_label)
+                painter.drawLine(db_width - 3, y, db_width, y)
 
-        self._draw_meter_bar(painter, left_bar_x, meter_top, bar_width, meter_height,
-                             self.left_level, self.peak_left, True)
-        self._draw_meter_bar(painter, right_bar_x, meter_top, bar_width, meter_height,
-                             self.right_level, self.peak_right, False)
+            self._draw_meter_bar(painter, left_bar_x, meter_top, bar_width, meter_height,
+                                 self.left_level, self.peak_left, True)
+            self._draw_meter_bar(painter, right_bar_x, meter_top, bar_width, meter_height,
+                                 self.right_level, self.peak_right, False)
 
-        painter.setFont(QFont("Inter", 11, QFont.Weight.Bold))
-        painter.setPen(QColor(Colors.LED_AMBER))
+            painter.setFont(QFont("Inter", 11, QFont.Weight.Bold))
+            painter.setPen(QColor(Colors.LED_AMBER))
 
-        left_label_x = left_bar_x + bar_width // 2 - 5
-        right_label_x = right_bar_x + bar_width // 2 - 5
+            left_label_x = left_bar_x + bar_width // 2 - 5
+            right_label_x = right_bar_x + bar_width // 2 - 5
 
-        painter.drawText(left_label_x, h - 10, "L")
-        painter.drawText(right_label_x, h - 10, "R")
+            painter.drawText(left_label_x, h - 10, "L")
+            painter.drawText(right_label_x, h - 10, "R")
+        finally:
+            painter.end()
 
 
 class LUFSDisplay(QWidget):
@@ -223,63 +222,66 @@ class LUFSDisplay(QWidget):
 
     def paintEvent(self, event):
         painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        try:
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
-        w = self.width()
-        h = self.height()
+            w = self.width()
+            h = self.height()
 
-        painter.fillRect(self.rect(), QColor(Colors.BG_PRIMARY))
+            painter.fillRect(self.rect(), QColor(Colors.BG_PRIMARY))
 
-        frame_margin = 4
-        frame_rect = QRect(frame_margin, frame_margin, w - 2 * frame_margin, h - 2 * frame_margin)
+            frame_margin = 4
+            frame_rect = QRect(frame_margin, frame_margin, w - 2 * frame_margin, h - 2 * frame_margin)
 
-        bezel_pen = QPen(QColor(Colors.CHROME_DARK), 1)
-        painter.setPen(bezel_pen)
-        painter.drawRect(frame_rect)
+            bezel_pen = QPen(QColor(Colors.CHROME_DARK), 1)
+            painter.setPen(bezel_pen)
+            painter.drawRect(frame_rect)
 
-        highlight_pen = QPen(QColor(Colors.CHROME_HIGHLIGHT), 1)
-        painter.setPen(highlight_pen)
-        painter.drawLine(frame_margin + 1, frame_margin + 1,
-                         w - frame_margin - 2, frame_margin + 1)
-        painter.drawLine(frame_margin + 1, frame_margin + 1,
-                         frame_margin + 1, h - frame_margin - 2)
+            highlight_pen = QPen(QColor(Colors.CHROME_HIGHLIGHT), 1)
+            painter.setPen(highlight_pen)
+            painter.drawLine(frame_margin + 1, frame_margin + 1,
+                             w - frame_margin - 2, frame_margin + 1)
+            painter.drawLine(frame_margin + 1, frame_margin + 1,
+                             frame_margin + 1, h - frame_margin - 2)
 
-        lcd_rect = QRect(frame_margin + 2, frame_margin + 2,
-                         w - 2 * frame_margin - 4, h - 2 * frame_margin - 4)
+            lcd_rect = QRect(frame_margin + 2, frame_margin + 2,
+                             w - 2 * frame_margin - 4, h - 2 * frame_margin - 4)
 
-        gradient = QLinearGradient(0, lcd_rect.top(), 0, lcd_rect.bottom())
-        gradient.setColorAt(0.0, QColor(Colors.PANEL_DEEP))
-        gradient.setColorAt(1.0, QColor("#050507"))
+            gradient = QLinearGradient(0, lcd_rect.top(), 0, lcd_rect.bottom())
+            gradient.setColorAt(0.0, QColor(Colors.PANEL_DEEP))
+            gradient.setColorAt(1.0, QColor("#050507"))
 
-        painter.fillRect(lcd_rect, gradient)
+            painter.fillRect(lcd_rect, gradient)
 
-        shadow_pen = QPen(QColor(Colors.CHROME_DARK), 1)
-        painter.setPen(shadow_pen)
-        painter.drawLine(frame_margin + 2, h - frame_margin - 3,
-                         w - frame_margin - 3, h - frame_margin - 3)
-        painter.drawLine(w - frame_margin - 3, frame_margin + 2,
-                         w - frame_margin - 3, h - frame_margin - 3)
+            shadow_pen = QPen(QColor(Colors.CHROME_DARK), 1)
+            painter.setPen(shadow_pen)
+            painter.drawLine(frame_margin + 2, h - frame_margin - 3,
+                             w - frame_margin - 3, h - frame_margin - 3)
+            painter.drawLine(w - frame_margin - 3, frame_margin + 2,
+                             w - frame_margin - 3, h - frame_margin - 3)
 
-        top_height = 18
-        middle_height = h - 2 * frame_margin - 4 - top_height - 14
-        bottom_height = 14
+            top_height = 18
+            middle_height = h - 2 * frame_margin - 4 - top_height - 14
+            bottom_height = 14
 
-        label_rect = QRect(frame_margin + 3, frame_margin + 3,
-                           w - 2 * frame_margin - 6, top_height)
-        painter.setFont(QFont("Inter", 8, QFont.Weight.Bold))
-        painter.setPen(QColor(Colors.LED_AMBER))
-        painter.drawText(label_rect, Qt.AlignmentFlag.AlignCenter, self.label.upper())
+            label_rect = QRect(frame_margin + 3, frame_margin + 3,
+                               w - 2 * frame_margin - 6, top_height)
+            painter.setFont(QFont("Inter", 8, QFont.Weight.Bold))
+            painter.setPen(QColor(Colors.LED_AMBER))
+            painter.drawText(label_rect, Qt.AlignmentFlag.AlignCenter, self.label.upper())
 
-        value_rect = QRect(frame_margin + 3, frame_margin + 3 + top_height,
-                           w - 2 * frame_margin - 6, middle_height)
-        painter.setFont(QFont("Courier New", 28, QFont.Weight.Bold))
-        accent_color = self._get_accent_color()
-        painter.setPen(QColor(accent_color))
-        painter.drawText(value_rect, Qt.AlignmentFlag.AlignCenter, f"{self.value:.1f}")
+            value_rect = QRect(frame_margin + 3, frame_margin + 3 + top_height,
+                               w - 2 * frame_margin - 6, middle_height)
+            painter.setFont(QFont("Courier New", 28, QFont.Weight.Bold))
+            accent_color = self._get_accent_color()
+            painter.setPen(QColor(accent_color))
+            painter.drawText(value_rect, Qt.AlignmentFlag.AlignCenter, f"{self.value:.1f}")
 
-        unit_rect = QRect(frame_margin + 3,
-                          frame_margin + 3 + top_height + middle_height,
-                          w - 2 * frame_margin - 6, bottom_height)
-        painter.setFont(QFont("Inter", 7))
-        painter.setPen(QColor(Colors.TEXT_TERTIARY))
-        painter.drawText(unit_rect, Qt.AlignmentFlag.AlignCenter, self.unit_text)
+            unit_rect = QRect(frame_margin + 3,
+                              frame_margin + 3 + top_height + middle_height,
+                              w - 2 * frame_margin - 6, bottom_height)
+            painter.setFont(QFont("Inter", 7))
+            painter.setPen(QColor(Colors.TEXT_TERTIARY))
+            painter.drawText(unit_rect, Qt.AlignmentFlag.AlignCenter, self.unit_text)
+        finally:
+            painter.end()

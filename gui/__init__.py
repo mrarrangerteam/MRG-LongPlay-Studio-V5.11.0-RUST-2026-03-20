@@ -4,6 +4,20 @@ gui/ package — Re-exports every public class for backward compatibility.
     from gui import LongPlayStudioV4, Colors, AudioPlayerWidget, ...
 
 All 28 original classes are available at this top level.
+
+Import order (BUG-INT-007):
+  1. gui.styles          — pure data (Colors), no Qt widget deps
+  2. gui.audio_player    — standalone player classes
+  3. gui.widgets.*       — leaf widgets (meter, waveform, drop_zone, collapsible)
+  4. gui.video.*         — preview/detached (depends on widgets)
+  5. gui.timeline.*      — canvas, tracks (depends on widgets + models)
+  6. gui.dialogs.*       — dialog windows (depend on widgets + timeline + video)
+  7. gui.main            — main window (depends on everything above)
+  8. gui.utils.compat    — lightweight flag, safe anywhere
+
+This ordering ensures each layer only imports from layers above it.
+No circular imports exist because gui.main is imported last and no
+sub-module imports from gui/__init__.py itself.
 """
 
 # --- Core ---

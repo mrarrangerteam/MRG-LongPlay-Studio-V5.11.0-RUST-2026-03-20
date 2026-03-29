@@ -7687,9 +7687,9 @@ class MasterPanel(QWidget):
         with self._meter_lock:
             if not self._meter_buffer:
                 return
-            # V5.8: Keep all buffered entries so we can extract per-stage data
-            buf_copy = list(self._meter_buffer)
-            self._meter_buffer.clear()
+            # V5.8: Atomic swap — avoids copy+clear race window
+            buf_copy = self._meter_buffer
+            self._meter_buffer = []
 
         # V5.8: Find latest entry for each stage we care about
         latest = buf_copy[-1]

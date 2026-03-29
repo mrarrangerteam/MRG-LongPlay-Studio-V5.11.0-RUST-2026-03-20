@@ -121,6 +121,7 @@ def _envelope_follower(signal: np.ndarray, sr: int,
                 envelope[i] = attack_coeff * envelope[i-1] + (1.0 - attack_coeff) * abs_signal[i]
             else:
                 envelope[i] = release_coeff * envelope[i-1] + (1.0 - release_coeff) * abs_signal[i]
+            envelope[i] += 1e-25  # flush denormals
     
     return np.maximum(envelope, 1e-10)
 
@@ -233,8 +234,8 @@ class _RealAudioProcessor:
                     a1 = 2 * ((A - 1) - (A + 1) * np.cos(w0))
                     a2 = (A + 1) - (A - 1) * np.cos(w0) - 2 * np.sqrt(A) * alpha
 
-                b_coef = np.array([b0 / a0, b1 / a0, b2 / a0])
-                a_coef = np.array([1.0, a1 / a0, a2 / a0])
+                b_coef = np.array([b0 / a0, b1 / a0, b2 / a0], dtype=np.float64)
+                a_coef = np.array([1.0, a1 / a0, a2 / a0], dtype=np.float64)
                 sos = np.array([[b_coef[0], b_coef[1], b_coef[2], 1.0, a_coef[1], a_coef[2]]])
             else:
                 continue
@@ -272,6 +273,10 @@ class _RealAudioProcessor:
             audio_bands = [low, mid, high]
             result = np.zeros_like(data)
 
+            # V5.11.0 FIX (BUG-DSP-002): Measure input RMS before compression
+            # to compensate for level loss from independent band processing
+            input_rms = np.sqrt(np.mean(data ** 2)) + 1e-10
+
             # Get per-band CompressorBand settings from dynamics module
             band_settings = dynamics.bands if hasattr(dynamics, 'bands') else []
 
@@ -300,7 +305,18 @@ class _RealAudioProcessor:
                 processed = board(audio, sr).T
                 result += processed
 
+            # V5.11.0 FIX (BUG-DSP-002): Restore RMS level after band recombination
+            # This compensates for the ~3dB loss from independent multiband processing
+            output_rms = np.sqrt(np.mean(result ** 2)) + 1e-10
+            if output_rms > 1e-8:
+                rms_compensation = input_rms / output_rms
+                # Limit compensation to prevent excessive boost (max +6dB)
+                rms_compensation = min(rms_compensation, 2.0)
+                result *= rms_compensation
+
             peak = np.max(np.abs(result))
+            if peak < 1e-10:
+                return result
             if peak > 0.99:
                 result *= 0.99 / peak
             return result
@@ -399,8 +415,15 @@ class _RealAudioProcessor:
         ch = getattr(imager, 'crossover_high', 4000)
         low, mid, high = _CrossoverFilter.split_3band(data, sr, cl, ch)
 
+        widths = [low_width, mid_width, high_width]
+        bands = [low, mid, high]
+
+        # V5.11.0 FIX (BUG-DSP-003): Measure input RMS before M/S processing
+        # to compensate for level changes from per-band width adjustments
+        input_rms = np.sqrt(np.mean(data ** 2)) + 1e-10
+
         result = np.zeros_like(data)
-        for band_data, width in zip([low, mid, high], [low_width, mid_width, high_width]):
+        for band_data, width in zip(bands, widths):
             left = band_data[:, 0]
             right = band_data[:, 1]
             m = (left + right) * 0.5
@@ -408,6 +431,12 @@ class _RealAudioProcessor:
             s_scaled = s * width
             result[:, 0] += m + s_scaled
             result[:, 1] += m - s_scaled
+
+        # V5.11.0 FIX (BUG-DSP-003): Restore RMS level after multiband M/S
+        output_rms = np.sqrt(np.mean(result ** 2)) + 1e-10
+        if output_rms > 1e-8:
+            rms_comp = min(input_rms / output_rms, 2.0)
+            result *= rms_comp
 
         # Mono bass
         mono_bass_freq = getattr(imager, 'mono_bass_freq', 0)
@@ -419,6 +448,8 @@ class _RealAudioProcessor:
             result = low_band + rest
 
         peak = np.max(np.abs(result))
+        if peak < 1e-10:
+            return result
         if peak > 0.99:
             result *= 0.99 / peak
 
@@ -448,6 +479,8 @@ class _RealAudioProcessor:
             result[:, 1] *= (1.0 + min(0, bal))
 
         peak = np.max(np.abs(result))
+        if peak < 1e-10:
+            return result
         if peak > 0.99:
             result *= 0.99 / peak
 
@@ -480,7 +513,13 @@ class _RealAudioProcessor:
         if soft_clip_on and soft_clip_pct > 0:
             amount = soft_clip_pct * intensity / 100.0
             drive = 1.0 + amount * 2.0
-            result = np.tanh(result * drive) / np.tanh(np.array([drive]))
+            tanh_drive = float(np.tanh(drive))
+            if tanh_drive < 1e-10 or not np.isfinite(tanh_drive):
+                pass  # skip soft clip — drive too small or invalid
+            else:
+                result = np.tanh(result * drive) / tanh_drive
+                if not np.all(np.isfinite(result)):
+                    result = np.nan_to_num(result, nan=0.0, posinf=1.0, neginf=-1.0)
 
         # ── Step 3: Gain Push (Ozone 12 style) ──
         # NOTE: gain_db is NOT scaled by intensity — user explicitly sets this value
@@ -543,7 +582,10 @@ class _RealAudioProcessor:
 
             # Guard against division by zero when threshold_db == -10.0
             upper_bound = -10.0
-            denom = upper_bound - threshold_db if abs(upper_bound - threshold_db) > 1e-6 else 1e-6
+            knee_width = 2.0
+            denom = abs(upper_bound - threshold_db)
+            if denom < knee_width:
+                denom = knee_width  # soft knee prevents cliff
             gain_db = np.where(
                 env_db < threshold_db, 0.0,
                 np.where(env_db < upper_bound,
@@ -707,9 +749,12 @@ class _RealAudioProcessor:
         ceiling_linear = 10 ** (ceiling_db / 20.0)
         result = np.zeros_like(data)
 
-        # Crossover frequencies
-        xover_low = 200    # Hz
-        xover_high = 4000  # Hz
+        # Crossover frequencies with Nyquist validation
+        nyquist = sr / 2.0
+        xover_low = min(200, nyquist * 0.05)
+        xover_high = min(4000, nyquist * 0.5)
+        if xover_low >= xover_high:
+            return data
 
         # Design crossover filters
         try:
@@ -770,6 +815,25 @@ class _RealAudioProcessor:
 
         # Sum bands
         result = bands[0] + bands[1] + bands[2]
+
+        # V5.11.0 FIX (BUG-DSP-004): Post-sum true peak enforcement
+        # Individual band limiting doesn't prevent the sum from exceeding ceiling.
+        # Apply a fast look-ahead limiter on the combined signal to catch overages
+        # while preserving transients (1ms attack for transparency).
+        if result.ndim > 1:
+            peak_env = np.max(np.abs(result), axis=1)
+        else:
+            peak_env = np.abs(result)
+        la_post = max(1, int(0.001 * sr))  # 1ms look-ahead (fast, transient-preserving)
+        peak_ahead = maximum_filter1d(peak_env, size=la_post * 2 + 1)
+        gr_post = np.where(peak_ahead > ceiling_linear,
+                           ceiling_linear / (peak_ahead + 1e-10), 1.0)
+        gr_post = minimum_filter1d(gr_post, size=la_post)
+        if result.ndim > 1:
+            result = result * gr_post[:, np.newaxis]
+        else:
+            result = result * gr_post
+
         return result
 
     @staticmethod

@@ -24,9 +24,13 @@ impl AtomicF32 {
         f32::from_bits(self.bits.load(Ordering::Relaxed))
     }
 
+    /// Store a value, rejecting NaN/Infinity to prevent corrupted parameters.
     #[inline]
     pub fn store(&self, val: f32) {
-        self.bits.store(val.to_bits(), Ordering::Relaxed);
+        // BUG-RUST-007: NaN guard — reject non-finite values
+        if val.is_finite() {
+            self.bits.store(val.to_bits(), Ordering::Relaxed);
+        }
     }
 }
 
@@ -129,16 +133,20 @@ impl RtParams {
         }
     }
 
-    /// Mark parameters as changed (called by setter methods).
+    /// Mark parameters as changed (called by setter methods on GUI thread).
+    /// Uses Release ordering to ensure all parameter writes are visible
+    /// to the audio thread when it observes dirty=true.
     #[inline]
     pub fn mark_dirty(&self) {
-        self.dirty.store(true, Ordering::Relaxed);
+        self.dirty.store(true, Ordering::Release);
     }
 
     /// Check and clear dirty flag (called by audio thread).
+    /// Uses Acquire ordering to synchronize with the Release in mark_dirty(),
+    /// guaranteeing all parameter stores are visible after this returns true.
     #[inline]
     pub fn take_dirty(&self) -> bool {
-        self.dirty.swap(false, Ordering::Relaxed)
+        self.dirty.swap(false, Ordering::Acquire)
     }
 }
 

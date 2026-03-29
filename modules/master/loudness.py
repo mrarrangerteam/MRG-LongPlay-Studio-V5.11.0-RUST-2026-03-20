@@ -217,6 +217,16 @@ class LoudnessMeter:
             analysis.normalization_type = data.get("normalization_type", "")
             analysis.target_offset_lu = float(data.get("target_offset", "0.0"))
 
+            # V5.11.0 FIX (BUG-DSP-006): Clamp target_offset to prevent
+            # 2nd-pass normalization from exceeding True Peak ceiling.
+            # If offset is too large (>12 LU), output can overshoot by 1-3 dBTP.
+            max_offset = 12.0
+            if abs(analysis.target_offset_lu) > max_offset:
+                print(f"[LOUDNESS] WARNING: target_offset {analysis.target_offset_lu:.1f} LU "
+                      f"clamped to ±{max_offset} LU to protect True Peak ceiling")
+                analysis.target_offset_lu = max(
+                    -max_offset, min(max_offset, analysis.target_offset_lu))
+
             # Set main values
             analysis.integrated_lufs = analysis.input_i
             analysis.true_peak_dbtp = analysis.input_tp

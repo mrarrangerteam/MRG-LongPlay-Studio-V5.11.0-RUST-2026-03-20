@@ -6,7 +6,10 @@ from gui.dialogs.hook_extractor import HookExtractorDialog
 from gui.dialogs.video_prompt import VideoPromptDialog
 from gui.dialogs.timestamp import TimestampDialog
 from gui.dialogs.publish_dialog import PublishDialog
-from gui.dialogs.content_factory import ContentFactoryDialog
+try:
+    from gui.dialogs.content_factory import ContentFactoryDialog
+except ImportError:
+    ContentFactoryDialog = None  # BUG-INT-012: optional dependency
 from gui.dialogs.lipsync_dialog import LipSyncDialog
 
 __all__ = [

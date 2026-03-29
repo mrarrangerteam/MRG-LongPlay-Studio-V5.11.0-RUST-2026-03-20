@@ -679,10 +679,10 @@ class LipSyncDialog(QDialog):
             upload_privacy=self._privacy_combo.currentText().lower(),
             parent=self,
         )
-        self._worker.progress.connect(self._on_progress)
-        self._worker.item_done.connect(self._on_item_done)
-        self._worker.all_done.connect(self._on_all_done)
-        self._worker.error.connect(self._on_error)
+        self._worker.progress.connect(self._on_progress, Qt.ConnectionType.QueuedConnection)
+        self._worker.item_done.connect(self._on_item_done, Qt.ConnectionType.QueuedConnection)
+        self._worker.all_done.connect(self._on_all_done, Qt.ConnectionType.QueuedConnection)
+        self._worker.error.connect(self._on_error, Qt.ConnectionType.QueuedConnection)
         self._worker.start()
 
     def _cancel_pipeline(self):

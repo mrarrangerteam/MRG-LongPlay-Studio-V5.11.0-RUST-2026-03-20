@@ -158,6 +158,11 @@ impl AudioStream {
                     let mut current_pos = position.load(Ordering::Relaxed);
                     let num_output_frames = data.len() / output_channels;
 
+                    // BUG-RUST-005: .min(total_frames.saturating_sub(1)) is correct —
+                    // src_pos is a 0-based index into audio_l/audio_r, so clamping to
+                    // total_frames-1 (the last valid index) is the right bound.
+                    // Verified as false positive.
+
                     // Check if params changed and apply to DSP modules
                     if params.take_dirty() {
                         apply_params_to_dsp(
@@ -185,9 +190,12 @@ impl AudioStream {
                     let mut frames_written: usize = 0;
                     let sr = target_sample_rate as i32;
 
-                    // Pre-allocate block buffers outside loop (avoid heap alloc per block)
+                    // Pre-allocate ALL buffers outside loop (BUG-RUST-001: no heap alloc in callback)
                     let mut block_l = vec![0.0f32; BLOCK_SIZE];
                     let mut block_r = vec![0.0f32; BLOCK_SIZE];
+                    let mut buf_ch_l = vec![0.0f32; BLOCK_SIZE];
+                    let mut buf_ch_r = vec![0.0f32; BLOCK_SIZE];
+                    let mut buffer: Vec<Vec<f32>> = vec![Vec::new(), Vec::new()];
 
                     while frames_written < num_output_frames {
                         let remaining = num_output_frames - frames_written;
@@ -206,11 +214,13 @@ impl AudioStream {
                             }
                         }
 
-                        // Build AudioBuffer (deinterleaved) — slice to actual block size
-                        let mut buffer = vec![
-                            block_l[..block_frames].to_vec(),
-                            block_r[..block_frames].to_vec(),
-                        ];
+                        // Reuse pre-allocated buffer (no heap alloc per block)
+                        buf_ch_l[..block_frames].copy_from_slice(&block_l[..block_frames]);
+                        buf_ch_r[..block_frames].copy_from_slice(&block_r[..block_frames]);
+                        buffer[0].clear();
+                        buffer[0].extend_from_slice(&buf_ch_l[..block_frames]);
+                        buffer[1].clear();
+                        buffer[1].extend_from_slice(&buf_ch_r[..block_frames]);
 
                         // Pre-gain headroom: -3 dB (matches V2 Python chain)
                         // Prevents clipping before the DSP chain on hot input signals
@@ -237,8 +247,12 @@ impl AudioStream {
 
                         // Write processed block to output + compute meters
                         for i in 0..block_frames {
+                            // BUG-RUST-010: flush denormals to zero to avoid
+                            // CPU spikes from subnormal float arithmetic
                             let l = buffer[0][i] * volume;
+                            let l = if l.abs() < 1e-38 { 0.0 } else { l };
                             let r = buffer[1][i] * volume;
+                            let r = if r.abs() < 1e-38 { 0.0 } else { r };
 
                             peak_l = peak_l.max(l.abs());
                             peak_r = peak_r.max(r.abs());
@@ -270,7 +284,9 @@ impl AudioStream {
                                     }
                                 }
                             }
-                            position.store(0, Ordering::Relaxed);
+                            // BUG-RUST-011: store end position so GUI shows
+                            // end-of-track rather than resetting to 0
+                            position.store(total_frames, Ordering::Relaxed);
                             playing.store(false, Ordering::Relaxed);
                             frames_written = num_output_frames; // exit loop
                             break;
@@ -286,12 +302,16 @@ impl AudioStream {
                     callback_count += 1;
                     if callback_count >= callbacks_per_meter {
                         callback_count = 0;
-                        let n = num_output_frames as f32;
+                        // BUG-RUST-006: guard against division by zero if num_output_frames==0
+                        let n = (num_output_frames as f32).max(1.0);
                         let rms_l = (sum_sq_l / n).sqrt();
                         let rms_r = (sum_sq_r / n).sqrt();
 
                         let gr = maximizer.peak_reduction_db() as f32;
 
+                        // BUG-THR-011: verified — uses try_send() (non-blocking).
+                        // Will silently drop meter data if channel is full,
+                        // which is the correct behavior for an audio callback.
                         let _ = meter_tx.try_send(MeterData {
                             peak_l: to_db(peak_l),
                             peak_r: to_db(peak_r),

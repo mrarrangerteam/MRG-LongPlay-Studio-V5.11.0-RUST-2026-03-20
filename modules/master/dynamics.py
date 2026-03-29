@@ -388,13 +388,16 @@ class Dynamics:
         high_comp = high.to_ffmpeg_filter(intensity) or "anull"
 
         # Complex filtergraph: split into 3 bands, compress each, merge
+        # V5.11.0 FIX (BUG-DSP-005): Use 4th-order Linkwitz-Riley crossover (p=4)
+        # for flatter reconstruction, and normalize=1 with volume=3 compensation
+        # to prevent wildly varying output levels depending on spectral content
         cf = (
             f"[0:a]asplit=3[low][mid][high];"
-            f"[low]lowpass=f={self.crossover_low}:p=2,{low_comp}[lo];"
-            f"[mid]highpass=f={self.crossover_low}:p=2,"
-            f"lowpass=f={self.crossover_high}:p=2,{mid_comp}[mi];"
-            f"[high]highpass=f={self.crossover_high}:p=2,{high_comp}[hi];"
-            f"[lo][mi][hi]amix=inputs=3:duration=first:normalize=0"
+            f"[low]lowpass=f={self.crossover_low}:p=4,{low_comp}[lo];"
+            f"[mid]highpass=f={self.crossover_low}:p=4,"
+            f"lowpass=f={self.crossover_high}:p=4,{mid_comp}[mi];"
+            f"[high]highpass=f={self.crossover_high}:p=4,{high_comp}[hi];"
+            f"[lo][mi][hi]amix=inputs=3:duration=first:normalize=1,volume=3.0"
         )
         return cf
 

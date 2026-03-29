@@ -7,7 +7,8 @@ try:
     if not _RUST_BACKEND_AVAILABLE:
         raise ImportError("No native backend, using Python fallback")
     NATIVE_BACKEND = True
-except ImportError:
+except ImportError as e:
+    print(f"[LongPlay] Native backend unavailable, using Python fallback: {e}")
     from .chain import MasterChain
     NATIVE_BACKEND = False
 

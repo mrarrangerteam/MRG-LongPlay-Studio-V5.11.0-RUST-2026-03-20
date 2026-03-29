@@ -186,7 +186,14 @@ except ImportError:
 
 
 class LongPlayStudioV4(QMainWindow):
-    """Main application window"""
+    """Main application window.
+
+    NOTE: Feature parity status with gui.py (standalone monolith):
+    gui/main.py includes Phase 2/4 features (undo, themes, text clips, speed ramp, pipeline)
+    that gui.py does not have. gui.py includes all helper classes inline while gui/main.py
+    imports from gui/ subpackages. When fixing bugs, check both files for duplicated code.
+    See CLAUDE.md "Dual Entry Points" for details.
+    """
 
     def __init__(self):
         super().__init__()
@@ -274,10 +281,47 @@ class LongPlayStudioV4(QMainWindow):
             self.statusBar().showMessage(f"Last action: {label}", 3000)
 
     def closeEvent(self, event) -> None:
-        """Clean up on app close."""
+        """Clean up all timers, threads, and resources on app close."""
         # I-2: Stop auto-save
         if self.auto_save:
             self.auto_save.stop()
+
+        # V5.11.0 FIX (BUG-GUI-006): Stop ALL timers — not just auto-save
+        for attr_name in [
+            '_gain_apply_timer', '_master_rerender_timer', 'export_timer',
+            '_meter_panel_timer', '_rt_pos_timer', 'playhead_timer',
+            'peak_hold_timer', 'update_timer', 'timer',
+        ]:
+            timer = getattr(self, attr_name, None)
+            if timer is not None:
+                try:
+                    timer.stop()
+                except RuntimeError:
+                    pass  # C++ object already deleted
+
+        # Stop RT engine if present
+        if hasattr(self, '_rt_engine') and self._rt_engine is not None:
+            try:
+                self._rt_engine.stop()
+            except Exception:
+                pass
+            self._rt_engine = None
+
+        # Stop meter widget
+        if hasattr(self, 'meter') and self.meter is not None:
+            try:
+                self.meter.stop()
+            except (RuntimeError, Exception):
+                pass
+
+        # Stop audio player
+        if hasattr(self, 'audio_player') and self.audio_player is not None:
+            try:
+                if hasattr(self.audio_player, 'player'):
+                    self.audio_player.player.stop()
+            except (RuntimeError, Exception):
+                pass
+
         super().closeEvent(event)
 
     def _setup_shortcuts(self):

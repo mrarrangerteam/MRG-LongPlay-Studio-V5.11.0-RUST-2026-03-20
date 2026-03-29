@@ -180,114 +180,115 @@ class SpectrumAnalyzerWidget(QWidget):
 
     def paintEvent(self, event) -> None:  # noqa: N802
         painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        try:
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
-        w = float(self.width())
-        h = float(self.height())
-        if w < 10 or h < 10:
-            return
+            w = float(self.width())
+            h = float(self.height())
+            if w < 10 or h < 10:
+                return
 
-        margin_left = 40.0
-        margin_right = 10.0
-        margin_top = 20.0
-        margin_bottom = 25.0
-        plot_w = w - margin_left - margin_right
-        plot_h = h - margin_top - margin_bottom
+            margin_left = 40.0
+            margin_right = 10.0
+            margin_top = 20.0
+            margin_bottom = 25.0
+            plot_w = w - margin_left - margin_right
+            plot_h = h - margin_top - margin_bottom
 
-        # background
-        painter.fillRect(self.rect(), QColor(Colors.BG_PRIMARY))
+            # background
+            painter.fillRect(self.rect(), QColor(Colors.BG_PRIMARY))
 
-        # grid lines — frequency
-        painter.setPen(QPen(QColor(Colors.BORDER), 1, Qt.PenStyle.DotLine))
-        freq_labels = [20, 50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000]
-        painter.setFont(QFont("Inter", 7))
-        for freq in freq_labels:
-            x = margin_left + _log_freq_to_x(freq, plot_w)
-            painter.drawLine(QPointF(x, margin_top), QPointF(x, margin_top + plot_h))
-            label = f"{freq // 1000}k" if freq >= 1000 else str(freq)
-            painter.setPen(QColor(Colors.TEXT_TERTIARY))
-            painter.drawText(QRectF(x - 15, margin_top + plot_h + 3, 30, 15),
-                             Qt.AlignmentFlag.AlignCenter, label)
+            # grid lines — frequency
             painter.setPen(QPen(QColor(Colors.BORDER), 1, Qt.PenStyle.DotLine))
+            freq_labels = [20, 50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000]
+            painter.setFont(QFont("Inter", 7))
+            for freq in freq_labels:
+                x = margin_left + _log_freq_to_x(freq, plot_w)
+                painter.drawLine(QPointF(x, margin_top), QPointF(x, margin_top + plot_h))
+                label = f"{freq // 1000}k" if freq >= 1000 else str(freq)
+                painter.setPen(QColor(Colors.TEXT_TERTIARY))
+                painter.drawText(QRectF(x - 15, margin_top + plot_h + 3, 30, 15),
+                                 Qt.AlignmentFlag.AlignCenter, label)
+                painter.setPen(QPen(QColor(Colors.BORDER), 1, Qt.PenStyle.DotLine))
 
-        # grid lines — dB
-        db_labels = [0, -6, -12, -18, -24, -36, -48, -60]
-        for db in db_labels:
-            y = margin_top + _db_to_y(db, plot_h)
-            painter.setPen(QPen(QColor(Colors.BORDER), 1, Qt.PenStyle.DotLine))
-            painter.drawLine(QPointF(margin_left, y), QPointF(margin_left + plot_w, y))
-            painter.setPen(QColor(Colors.TEXT_TERTIARY))
-            painter.drawText(QRectF(0, y - 7, margin_left - 4, 14),
+            # grid lines — dB
+            db_labels = [0, -6, -12, -18, -24, -36, -48, -60]
+            for db in db_labels:
+                y = margin_top + _db_to_y(db, plot_h)
+                painter.setPen(QPen(QColor(Colors.BORDER), 1, Qt.PenStyle.DotLine))
+                painter.drawLine(QPointF(margin_left, y), QPointF(margin_left + plot_w, y))
+                painter.setPen(QColor(Colors.TEXT_TERTIARY))
+                painter.drawText(QRectF(0, y - 7, margin_left - 4, 14),
+                                 Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
+                                 f"{db}")
+
+            # build spectrum path
+            path = QPainterPath()
+            fill_path = QPainterPath()
+            bottom_y = margin_top + plot_h
+
+            log_bins = np.logspace(math.log10(FREQ_MIN), math.log10(FREQ_MAX), NUM_DISPLAY_BINS)
+            first = True
+            for i in range(NUM_DISPLAY_BINS):
+                x = margin_left + _log_freq_to_x(log_bins[i], plot_w)
+                y = margin_top + _db_to_y(self._smoothed_db[i], plot_h)
+                pt = QPointF(x, y)
+                if first:
+                    path.moveTo(pt)
+                    fill_path.moveTo(QPointF(x, bottom_y))
+                    fill_path.lineTo(pt)
+                    first = False
+                else:
+                    path.lineTo(pt)
+                    fill_path.lineTo(pt)
+
+            # close fill path
+            last_x = margin_left + _log_freq_to_x(log_bins[-1], plot_w)
+            fill_path.lineTo(QPointF(last_x, bottom_y))
+            fill_path.closeSubpath()
+
+            # gradient fill
+            grad = QLinearGradient(margin_left, 0, margin_left + plot_w, 0)
+            for pos, color in self._grad_colors:
+                grad.setColorAt(pos, color)
+            painter.setBrush(QBrush(grad))
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.drawPath(fill_path)
+
+            # spectrum line
+            line_grad = QLinearGradient(margin_left, 0, margin_left + plot_w, 0)
+            line_grad.setColorAt(0.0, QColor(0, 150, 255, 220))
+            line_grad.setColorAt(0.5, QColor(0, 220, 220, 240))
+            line_grad.setColorAt(1.0, QColor(255, 160, 60, 240))
+            painter.setPen(QPen(QBrush(line_grad), 1.5))
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawPath(path)
+
+            # peak line
+            peak_path = QPainterPath()
+            first = True
+            for i in range(NUM_DISPLAY_BINS):
+                x = margin_left + _log_freq_to_x(log_bins[i], plot_w)
+                y = margin_top + _db_to_y(self._peak_db[i], plot_h)
+                pt = QPointF(x, y)
+                if first:
+                    peak_path.moveTo(pt)
+                    first = False
+                else:
+                    peak_path.lineTo(pt)
+            painter.setPen(QPen(QColor(255, 255, 255, 60), 1))
+            painter.drawPath(peak_path)
+
+            # Pre/Post label
+            painter.setFont(QFont("Inter", 9, QFont.Weight.Bold))
+            label = "POST EQ" if self._is_post_eq else "PRE EQ"
+            label_color = QColor(Colors.TEAL) if self._is_post_eq else QColor(Colors.LED_AMBER)
+            painter.setPen(label_color)
+            painter.drawText(QRectF(w - 80, 2, 75, 16),
                              Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
-                             f"{db}")
-
-        # build spectrum path
-        path = QPainterPath()
-        fill_path = QPainterPath()
-        bottom_y = margin_top + plot_h
-
-        log_bins = np.logspace(math.log10(FREQ_MIN), math.log10(FREQ_MAX), NUM_DISPLAY_BINS)
-        first = True
-        for i in range(NUM_DISPLAY_BINS):
-            x = margin_left + _log_freq_to_x(log_bins[i], plot_w)
-            y = margin_top + _db_to_y(self._smoothed_db[i], plot_h)
-            pt = QPointF(x, y)
-            if first:
-                path.moveTo(pt)
-                fill_path.moveTo(QPointF(x, bottom_y))
-                fill_path.lineTo(pt)
-                first = False
-            else:
-                path.lineTo(pt)
-                fill_path.lineTo(pt)
-
-        # close fill path
-        last_x = margin_left + _log_freq_to_x(log_bins[-1], plot_w)
-        fill_path.lineTo(QPointF(last_x, bottom_y))
-        fill_path.closeSubpath()
-
-        # gradient fill
-        grad = QLinearGradient(margin_left, 0, margin_left + plot_w, 0)
-        for pos, color in self._grad_colors:
-            grad.setColorAt(pos, color)
-        painter.setBrush(QBrush(grad))
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.drawPath(fill_path)
-
-        # spectrum line
-        line_grad = QLinearGradient(margin_left, 0, margin_left + plot_w, 0)
-        line_grad.setColorAt(0.0, QColor(0, 150, 255, 220))
-        line_grad.setColorAt(0.5, QColor(0, 220, 220, 240))
-        line_grad.setColorAt(1.0, QColor(255, 160, 60, 240))
-        painter.setPen(QPen(QBrush(line_grad), 1.5))
-        painter.setBrush(Qt.BrushStyle.NoBrush)
-        painter.drawPath(path)
-
-        # peak line
-        peak_path = QPainterPath()
-        first = True
-        for i in range(NUM_DISPLAY_BINS):
-            x = margin_left + _log_freq_to_x(log_bins[i], plot_w)
-            y = margin_top + _db_to_y(self._peak_db[i], plot_h)
-            pt = QPointF(x, y)
-            if first:
-                peak_path.moveTo(pt)
-                first = False
-            else:
-                peak_path.lineTo(pt)
-        painter.setPen(QPen(QColor(255, 255, 255, 60), 1))
-        painter.drawPath(peak_path)
-
-        # Pre/Post label
-        painter.setFont(QFont("Inter", 9, QFont.Weight.Bold))
-        label = "POST EQ" if self._is_post_eq else "PRE EQ"
-        label_color = QColor(Colors.TEAL) if self._is_post_eq else QColor(Colors.LED_AMBER)
-        painter.setPen(label_color)
-        painter.drawText(QRectF(w - 80, 2, 75, 16),
-                         Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
-                         label)
-
-        painter.end()
+                             label)
+        finally:
+            painter.end()
 
     def mousePressEvent(self, event) -> None:  # noqa: N802
         """Click to toggle pre/post EQ."""
