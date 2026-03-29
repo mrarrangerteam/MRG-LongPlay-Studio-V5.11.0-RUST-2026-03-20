@@ -8505,8 +8505,9 @@ class LongPlayStudioV4(QMainWindow):
             if hasattr(self.right_logic_meter, 'set_ceiling'):
                 self.right_logic_meter.set_ceiling(ceiling)
 
-        # 5. Process audio + hot-swap in QMediaPlayer (offline preview)
-        #    This renders the gained audio to a temp WAV and swaps it in
+        # 5. RT engine: push gain instantly; or offline preview fallback
+        if self._rt_engine and self._rt_active:
+            self._rt_engine.set_gain(gain_db)
         self._trigger_master_rerender()
 
     def _on_right_ceiling_changed(self, value: float):
@@ -8735,6 +8736,7 @@ class LongPlayStudioV4(QMainWindow):
                 # V5.11.0 FIX (BUG-THR-001): Capture chain + ceiling on main thread
                 # BEFORE spawning background thread — never access GUI widgets from worker
                 chain_snapshot = self._get_right_panel_chain()
+                self._sync_right_panel_to_chain()  # Sync gain/ceiling/IRC to chain
                 ceiling_snapshot = self.right_ceiling_spin.value() if hasattr(self, 'right_ceiling_spin') else -1.0
 
                 def _render_mastered():
@@ -9014,12 +9016,14 @@ class LongPlayStudioV4(QMainWindow):
         self._trigger_master_rerender()
 
     def _switch_to_rt_engine(self):
-        """V5.10: Switch from QMediaPlayer to Rust RT engine for real-time DSP.
-        DISABLED auto-switch: RT engine conflicts with QMediaPlayer causing choppy audio.
-        Use offline preview (_trigger_master_rerender) instead.
+        """V5.11.0: Switch from QMediaPlayer to Rust RT engine for real-time DSP.
+        Re-enabled with proper QMediaPlayer shutdown sequence to prevent choppy audio.
         """
-        # V5.10.1: Disabled auto-switch — QMediaPlayer + offline preview is more stable
-        return
+        if self._rt_engine is None:
+            print("[RT ENGINE] Not available — falling back to offline preview")
+            return
+        if self._rt_active:
+            return  # Already active
 
         # Find current audio file
         current_file = None
@@ -9039,9 +9043,11 @@ class LongPlayStudioV4(QMainWindow):
             was_playing = self.audio_player.is_playing if hasattr(self, 'audio_player') else False
             pos_ms = self.audio_player.player.position() if hasattr(self, 'audio_player') else 0
 
-            # ★ COMPLETELY STOP QMediaPlayer (release audio device)
+            # V5.11.0 FIX: Properly stop QMediaPlayer BEFORE RT engine starts
+            # — stop playback, mute output, clear source to fully release audio device
             self.audio_player.player.stop()
             self.audio_player.audio_output.setVolume(0.0)
+            self.audio_player.player.setSource(QUrl())  # Release audio device
 
             # Load file into RT engine
             if self._rt_file != current_file:
@@ -9091,11 +9097,13 @@ class LongPlayStudioV4(QMainWindow):
             self._rt_pos_timer.stop()
             self._rt_active = False
 
-            # Restore QMediaPlayer
+            # Restore QMediaPlayer with source file
             if hasattr(self, 'audio_player'):
                 self.audio_player.audio_output.setVolume(1.0)
-                self.audio_player.player.setPosition(pos_ms)
-                self.audio_player.player.play()
+                # V5.11.0: Reload source file (cleared during RT switch)
+                if self._rt_file and os.path.exists(self._rt_file):
+                    self.audio_player.player.setSource(QUrl.fromLocalFile(self._rt_file))
+                QTimer.singleShot(50, lambda: self._restore_after_gain(pos_ms, True))
             print("[RT ENGINE] Deactivated → QMediaPlayer resumed")
         except Exception as e:
             print(f"[RT ENGINE] Switch back failed: {e}")
@@ -9167,14 +9175,69 @@ class LongPlayStudioV4(QMainWindow):
             pass  # Don't spam errors at 30fps
 
     def _trigger_master_rerender(self):
-        """V5.10: Trigger preview — only needed when RT engine is NOT active."""
+        """V5.11.0: Trigger real-time preview via RT engine or offline fallback.
+        Automatically activates RT engine when mastering controls are adjusted.
+        """
         if self._rt_active:
-            return  # RT engine handles everything in real-time
+            # RT engine active — just sync parameters (instant, no re-render needed)
+            self._sync_rt_params()
+            return
+
+        # V5.11.0: Try to activate RT engine for real-time DSP
+        if self._rt_engine is not None and not self._rt_active:
+            self._switch_to_rt_engine()
+            if self._rt_active:
+                self._sync_rt_params()
+                return
+
+        # Fallback: offline preview (process → temp WAV → hot-swap)
         if not hasattr(self, '_master_rerender_timer'):
             self._master_rerender_timer = QTimer()
             self._master_rerender_timer.setSingleShot(True)
             self._master_rerender_timer.timeout.connect(self._apply_realtime_preview)
         self._master_rerender_timer.start(150)
+
+    def _sync_rt_params(self):
+        """V5.11.0: Push current knob values to RT engine atomically."""
+        if not self._rt_engine or not self._rt_active:
+            return
+        try:
+            gain_db = getattr(self, '_right_gain_db', 0.0)
+            ceiling = self.right_ceiling_spin.value() if hasattr(self, 'right_ceiling_spin') else -1.0
+            width = self.right_width_dial.value() if hasattr(self, 'right_width_dial') else 100
+            self._rt_engine.set_gain(gain_db)
+            self._rt_engine.set_ceiling(ceiling)
+            self._rt_engine.set_width(width)
+
+            # IRC mode
+            if hasattr(self, 'right_irc_combo'):
+                try:
+                    self._rt_engine.set_irc_mode(self.right_irc_combo.currentText())
+                except Exception:
+                    pass
+
+            # EQ bands (if available in the chain)
+            chain = self._get_right_panel_chain()
+            if chain and hasattr(chain, 'equalizer'):
+                eq = chain.equalizer
+                for i in range(min(8, len(getattr(eq, 'bands', [])))):
+                    band = eq.bands[i]
+                    gain = getattr(band, 'gain', 0.0)
+                    try:
+                        self._rt_engine.set_eq_gain(i, gain)
+                    except Exception:
+                        pass
+
+            # Dynamics bypass
+            if chain and hasattr(chain, 'dynamics'):
+                bypassed = not getattr(chain.dynamics, 'enabled', False)
+                try:
+                    self._rt_engine.set_dyn_bypass(bypassed)
+                except Exception:
+                    pass
+
+        except Exception as e:
+            print(f"[RT ENGINE] Param sync error: {e}")
 
     def _on_forwarded_meter_data(self, levels: dict):
         """Receive meter data forwarded from MasterPanel._update_realtime_meters().
@@ -9638,6 +9701,9 @@ class LongPlayStudioV4(QMainWindow):
             # V5.11.0 FIX (BUG-THR-002): Capture chain + GUI values on main thread
             # before spawning background thread — avoid accessing widgets from worker
             chain_snapshot = self._get_right_panel_chain()
+            # V5.11.0 FIX: Sync GUI values to chain BEFORE processing —
+            # without this, chain.maximizer.gain_db stays at 0.0 and GR is always 0
+            self._sync_right_panel_to_chain()
             dyn_amount_pct = self.right_dyn_amount.value() / 100.0 if hasattr(self, 'right_dyn_amount') else 0.3
 
             def _process_in_bg():
