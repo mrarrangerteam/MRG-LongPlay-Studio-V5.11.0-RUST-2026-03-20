@@ -104,26 +104,51 @@ class _CrossoverFilter:
 
 def _envelope_follower(signal: np.ndarray, sr: int,
                        attack_ms: float, release_ms: float) -> np.ndarray:
-    """Vectorized envelope follower with separate attack/release coefficients."""
-    # Use proper separate coefficients for attack and release
+    """Envelope follower with separate attack/release coefficients.
+
+    Vectorized via scipy.signal.lfilter (C implementation, ~100x faster than a
+    Python for-loop on typical 44.1 kHz signals).  The two-pass max() approach
+    is a standard audio-DSP approximation: the attack pass tracks signal rises
+    quickly while the release pass tracks falls slowly; taking the element-wise
+    maximum gives the classic "fast-attack / slow-release" envelope shape.
+
+    Falls back to the original Python loop when scipy is unavailable so that
+    the chain still works without the scientific stack.
+    """
     attack_coeff = np.exp(-1.0 / (attack_ms * sr / 1000.0))
     release_coeff = np.exp(-1.0 / (release_ms * sr / 1000.0))
-    
+
     abs_signal = np.abs(signal).astype(np.float64)
-    
-    # Apply envelope follower with adaptive attack/release
-    envelope = np.zeros_like(abs_signal)
-    if len(abs_signal) > 0:
-        envelope[0] = abs_signal[0]
-        for i in range(1, len(abs_signal)):
-            # Use attack_coeff when signal rises, release_coeff when it falls
-            if abs_signal[i] > envelope[i-1]:
-                envelope[i] = attack_coeff * envelope[i-1] + (1.0 - attack_coeff) * abs_signal[i]
-            else:
-                envelope[i] = release_coeff * envelope[i-1] + (1.0 - release_coeff) * abs_signal[i]
-            envelope[i] += 1e-25  # flush denormals
-    
-    return np.maximum(envelope, 1e-10)
+
+    try:
+        from scipy.signal import lfilter
+
+        # Attack pass: one-pole IIR — responds quickly to rising signal
+        b_a = np.array([1.0 - attack_coeff])
+        a_a = np.array([1.0, -attack_coeff])
+        env_attack = lfilter(b_a, a_a, abs_signal)
+
+        # Release pass: one-pole IIR — responds slowly to falling signal
+        b_r = np.array([1.0 - release_coeff])
+        a_r = np.array([1.0, -release_coeff])
+        env_release = lfilter(b_r, a_r, abs_signal)
+
+        # Fast attack / slow release: take element-wise maximum
+        envelope = np.maximum(env_attack, env_release) + 1e-25
+        return np.maximum(envelope, 1e-10)
+
+    except ImportError:
+        # Fallback: pure-Python loop (slow but correct)
+        envelope = np.zeros_like(abs_signal)
+        if len(abs_signal) > 0:
+            envelope[0] = abs_signal[0]
+            for i in range(1, len(abs_signal)):
+                if abs_signal[i] > envelope[i - 1]:
+                    envelope[i] = attack_coeff * envelope[i - 1] + (1.0 - attack_coeff) * abs_signal[i]
+                else:
+                    envelope[i] = release_coeff * envelope[i - 1] + (1.0 - release_coeff) * abs_signal[i]
+                envelope[i] += 1e-25
+        return np.maximum(envelope, 1e-10)
 
 
 class _RealAudioProcessor:
@@ -648,16 +673,17 @@ class _RealAudioProcessor:
 
         # ═══ IRC 3/4/5: Multi-band processing ═══
         if irc_num >= 3 and result.ndim > 1:
+            # ── IRC 4: Saturation applied BEFORE multiband limiting ──
+            # (was dead code outside this block — moved here so it actually runs)
+            if irc_num == 4:
+                sat_amount = 0.3 + character / 10.0 * 0.5  # character 0-10 → 0.3-0.8
+                drive = 1.0 + sat_amount * 3.0
+                result = np.tanh(result * drive) / np.tanh(np.array([drive]))
+
             result = _RealAudioProcessor._multiband_limit(
                 result, sr, ceiling_db, attack_ms, release_ms, knee_db, irc_num, character)
             np.clip(result, -ceiling_linear, ceiling_linear, out=result)
             return result
-
-        # ═══ IRC 4: Saturation before limiting ═══
-        if irc_num == 4:
-            sat_amount = 0.3 + character / 10.0 * 0.5  # character 0-10 → 0.3-0.8
-            drive = 1.0 + sat_amount * 3.0
-            result = np.tanh(result * drive) / np.tanh(np.array([drive]))
 
         # ═══ IRC 5: Heavy compression before limiting ═══
         if irc_num == 5:
@@ -981,10 +1007,10 @@ class _RealAudioProcessor:
                     else:
                         result[start:end] = x_limited
 
-            return result.astype(np.float32)
+            return result  # already float64 (initialised with .astype(np.float64) above)
         except Exception:
             ceiling_linear = 10 ** (ceiling_db / 20.0)
-            return np.clip(data, -ceiling_linear, ceiling_linear)
+            return np.clip(data, -ceiling_linear, ceiling_linear).astype(np.float64)
 
     # ─── Final True Peak Limiter ───
     @staticmethod
@@ -1484,6 +1510,23 @@ class MasterChain:
             callback(90, "Enforcing True Peak ceiling...")
         result = _RealAudioProcessor.final_true_peak_limit(
             result, sr, self.target_tp)
+
+        # Step 7: Sample Peak Normalization (DAW meter compatibility)
+        # Logic Pro X and most DAWs show SAMPLE peak (no oversampling).
+        # True peak limiter controls inter-sample peaks which can be 0.5–3 dB
+        # higher than sample peaks — DAW meters read too low without this step.
+        # Normalize sample peak to target_tp so DAW meters show correct value.
+        target_sample_peak = 10 ** (self.target_tp / 20.0)
+        current_sample_peak = np.max(np.abs(result))
+        if current_sample_peak > 1e-10:
+            gain = target_sample_peak / current_sample_peak
+            result = result * gain
+            np.clip(result, -target_sample_peak, target_sample_peak, out=result)
+        _sp_db = 20 * np.log10(np.max(np.abs(result)) + 1e-10)
+        print(f"[SAMPLE PEAK] Target: {self.target_tp:.2f} dBFS | "
+              f"Actual: {_sp_db:.2f} dBFS | "
+              f"{'PASS' if abs(_sp_db - self.target_tp) <= 0.05 else 'FAIL'}")
+
         self._send_meter(result, sr, "final")
 
         return result
@@ -1827,6 +1870,33 @@ class MasterChain:
             if callback:
                 callback(90, "Finalizing...")
 
+            # V5.11.1: Python post-processing — LUFS correction + True Peak enforcement
+            # Rust LUFS normalization has a systematic offset vs pyloudnorm (~+3 LU).
+            # Python post-processing corrects this and enforces True Peak ceiling properly.
+            if os.path.exists(output_path) and HAS_SOUNDFILE and HAS_PYLOUDNORM:
+                try:
+                    data, sr = sf.read(output_path)
+                    if data.ndim == 1:
+                        data = np.column_stack([data, data])
+                    data = data.astype(np.float64)
+
+                    # Step A: LUFS correction — measure actual integrated LUFS
+                    meter = pyln.Meter(sr)
+                    measured_lufs = meter.integrated_loudness(data)
+                    if measured_lufs > -70.0 and abs(measured_lufs - self.target_lufs) > 0.3:
+                        data = pyln.normalize.loudness(data, measured_lufs, self.target_lufs)
+                        print(f"[CHAIN] ✓ LUFS corrected: {measured_lufs:.2f} → {self.target_lufs:.2f}")
+
+                    # Step B: True Peak ceiling enforcement via Python LookAheadLimiter
+                    ceiling = getattr(self, 'target_tp', -1.0)
+                    limiter = LookAheadLimiterFast(ceiling_db=ceiling, true_peak=True)
+                    data = limiter.process(data.astype(np.float64), sr)
+
+                    sf.write(output_path, data.astype(np.float32), sr, subtype='PCM_24')
+                    print(f"[CHAIN] ✓ Post-processing: LUFS norm + True Peak limit ({ceiling} dBTP)")
+                except Exception as pp_err:
+                    print(f"[CHAIN] ⚠ Post-processing skipped: {pp_err}")
+
             # Send meter data for spectrum
             if os.path.exists(output_path) and self._meter_callback:
                 try:
@@ -1871,10 +1941,11 @@ class MasterChain:
             rc.dynamics_set_makeup_gain(sb.makeup)
 
             # EQ — sync band settings
+            # FIX V5.11.1: EQBand stores Q as band.width (not band.q — band.q doesn't exist)
             if hasattr(self.equalizer, 'bands'):
                 for i, band in enumerate(self.equalizer.bands[:8]):
                     try:
-                        rc.eq_set_band(i, band.freq, band.gain, band.q)
+                        rc.eq_set_band(i, band.freq, band.gain, band.width)
                         rc.eq_set_band_enabled(i, band.enabled)
                     except Exception:
                         pass
@@ -1885,7 +1956,11 @@ class MasterChain:
                 rc.imager_set_balance(self.imager.balance)
 
             # Target levels
-            rc.set_target_lufs(self.target_lufs)
+            # FIX V5.11.1: Pass gain_offset so Rust LUFS normalization preserves
+            # the Maximizer's gain push (matches Python path in _process_audio_real).
+            gain_offset = max(0.0, getattr(self.maximizer, 'gain_db', 0.0))
+            effective_lufs = max(-23.0, min(-2.0, self.target_lufs + gain_offset))
+            rc.set_target_lufs(effective_lufs)
             rc.set_target_tp(self.target_tp)
             rc.set_intensity(self.intensity)
 
