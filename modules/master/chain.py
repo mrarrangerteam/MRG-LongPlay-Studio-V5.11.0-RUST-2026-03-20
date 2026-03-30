@@ -590,9 +590,11 @@ class _RealAudioProcessor:
                 result, sr, ceiling_db, character, irc_params)
 
         # ── Step 6: True Peak Limiting ──
+        # V5.11.1 FIX: Limit at ceiling_db - 0.5 dBTP to leave headroom for inter-sample
+        # peaks introduced by Step 7 sample-peak normalization. Prevents TP overshoot.
         true_peak = getattr(maximizer, 'true_peak', True)
         if true_peak and HAS_SCIPY:
-            result = _RealAudioProcessor._true_peak_limit(result, sr, ceiling_db)
+            result = _RealAudioProcessor._true_peak_limit(result, sr, ceiling_db - 0.5)
 
         return result.astype(np.float64)
 
@@ -1504,12 +1506,13 @@ class MasterChain:
             self._send_meter(result, sr, "post_loudnorm")
 
         # Step 6: Final True Peak Brickwall Limiter
-        # This is the ABSOLUTE LAST step — enforces ceiling no matter what.
-        # Uses pedalboard Limiter which handles inter-sample peaks properly.
+        # V5.11.1 FIX: Limit at (target_tp - 0.5) dBTP, e.g. -1.5 dBTP when target is -1.0.
+        # Step 7 normalizes sample peak UP to -1.0 dBFS which can push inter-sample peaks
+        # by ~0.5 dB. Limiting 0.5 dB lower ensures True Peak ≤ -0.5 dBTP after Step 7.
         if callback:
             callback(90, "Enforcing True Peak ceiling...")
         result = _RealAudioProcessor.final_true_peak_limit(
-            result, sr, self.target_tp)
+            result, sr, self.target_tp - 0.5)
 
         # Step 7: Sample Peak Normalization (DAW meter compatibility)
         # Logic Pro X and most DAWs show SAMPLE peak (no oversampling).
