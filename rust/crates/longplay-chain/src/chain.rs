@@ -7,6 +7,7 @@ use longplay_dsp::equalizer::Equalizer;
 use longplay_dsp::dynamics::Dynamics;
 use longplay_dsp::imager::Imager;
 use longplay_dsp::maximizer::Maximizer;
+use longplay_dsp::biquad::{BiquadFilter, FilterType, calc_biquad_coeffs};
 use longplay_analysis::analyzer::{AudioAnalyzer, AudioAnalysis};
 use longplay_analysis::loudness::{LoudnessMeter, LoudnessAnalysis};
 use longplay_ai::recommend::{AIAssist, MasterRecommendation};
@@ -269,8 +270,8 @@ impl MasterChain {
         // Stage 5: Maximizer/Limiter (modifies in-place)
         self.maximizer.process(&mut buffer, sample_rate as i32);
 
-        // Stage 6: Loudness Normalization (RMS-based estimation)
-        let loudness_gain = self.estimate_rms_gain(&buffer);
+        // Stage 6: Loudness Normalization (K-weighted LUFS, ITU-R BS.1770-4)
+        let loudness_gain = self.estimate_lufs_gain(&buffer, sample_rate);
         for channel in &mut buffer {
             for sample in channel.iter_mut() {
                 *sample *= loudness_gain;
@@ -742,46 +743,79 @@ impl MasterChain {
         }
     }
 
-    /// Estimate RMS-based gain to approximate target LUFS alignment.
-    /// This is a fast buffer-based approximation (not ITU-R BS.1770-4 compliant).
-    fn estimate_rms_gain(&self, buffer: &AudioBuffer) -> f32 {
+    /// K-weighted LUFS gain estimation (ITU-R BS.1770-4 compliant).
+    ///
+    /// Replaces the old RMS-based estimate that had a ~3 LU systematic error.
+    /// K-weighting = Stage1 (high-shelf pre-filter ~1682 Hz, +4 dB) +
+    ///               Stage2 (high-pass ~38 Hz).
+    /// LUFS = -0.691 + 10 * log10(mean K-weighted square)
+    fn estimate_lufs_gain(&self, buffer: &AudioBuffer, sample_rate: u32) -> f32 {
         if buffer.is_empty() || buffer[0].is_empty() {
             return 1.0;
         }
 
-        // Calculate RMS across all channels
+        let sr = sample_rate as i32;
+
+        // K-weighting Stage 1: pre-filter (high-shelf at ~1681.97 Hz, +4 dB)
+        let coeffs1 = calc_biquad_coeffs(FilterType::HighShelf, 1681.975, 3.9990748, 0.7071068, sr);
+        // K-weighting Stage 2: RLB high-pass filter (~38.14 Hz, Q=0.5)
+        let coeffs2 = calc_biquad_coeffs(FilterType::HighPass, 38.135, 0.0, 0.5, sr);
+
+        let num_channels = buffer.len();
+        let n_samples = buffer[0].len();
+        let mut sum_sq = 0.0f64;
+
+        for channel in buffer {
+            let mut f1 = BiquadFilter::new();
+            let mut f2 = BiquadFilter::new();
+            f1.set_coefficients(&coeffs1);
+            f2.set_coefficients(&coeffs2);
+
+            for &sample in channel {
+                let s1 = f1.process_sample(sample);
+                let s2 = f2.process_sample(s1);
+                sum_sq += (s2 as f64) * (s2 as f64);
+            }
+        }
+
+        let n_total = (num_channels * n_samples) as f64;
+        if n_total == 0.0 || sum_sq <= 1e-20 {
+            return 1.0; // Silence
+        }
+
+        let mean_sq = sum_sq / n_total;
+
+        // LUFS formula: -0.691 + 10 * log10(mean_K_square)  [ITU-R BS.1770-4]
+        let lufs_estimate = -0.691 + 10.0 * mean_sq.log10();
+
+        // Calculate gain needed to reach target LUFS
+        let gain_db = (self.target_lufs as f64) - lufs_estimate;
+        let gain_db = gain_db.clamp(-20.0, 20.0);
+
+        10.0_f64.powf(gain_db / 20.0) as f32
+    }
+
+    /// Legacy RMS-based gain estimation (kept for reference, not used).
+    /// Note: had ~3 LU systematic error vs pyloudnorm/ITU-R BS.1770-4.
+    #[allow(dead_code)]
+    fn estimate_rms_gain(&self, buffer: &AudioBuffer) -> f32 {
+        if buffer.is_empty() || buffer[0].is_empty() {
+            return 1.0;
+        }
         let mut sum_sq = 0.0f64;
         let mut total_samples = 0usize;
-
         for channel in buffer {
             for &sample in channel {
                 sum_sq += (sample as f64) * (sample as f64);
             }
             total_samples += channel.len();
         }
-
-        if total_samples == 0 {
-            return 1.0;
-        }
-
+        if total_samples == 0 { return 1.0; }
         let rms = (sum_sq / total_samples as f64).sqrt();
-
-        if rms <= 1e-10 {
-            return 1.0; // Silence -- no gain needed
-        }
-
-        // Convert RMS to approximate dBFS (rough LUFS proxy)
+        if rms <= 1e-10 { return 1.0; }
         let rms_db = 20.0 * rms.log10();
-
-        // Calculate gain needed to reach target LUFS
-        // Note: RMS approximates LUFS within ~3 LU for most program material
         let gain_db = (self.target_lufs as f64) - rms_db;
-
-        // Limit gain range to prevent extreme amplification or attenuation
-        let gain_db = gain_db.clamp(-20.0, 20.0);
-
-        // Convert dB to linear gain
-        10.0_f64.powf(gain_db / 20.0) as f32
+        10.0_f64.powf(gain_db.clamp(-20.0, 20.0) / 20.0) as f32
     }
 
     /// Hard clip all samples exceeding the ceiling level

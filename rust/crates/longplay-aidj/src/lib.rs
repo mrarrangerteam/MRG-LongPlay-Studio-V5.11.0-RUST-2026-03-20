@@ -646,6 +646,7 @@ fn correlation(a: &Array1<f64>, b: &Array1<f64>) -> f64 {
 // ==================== YouTube Generator ====================
 
 /// YouTube metadata generator
+#[allow(dead_code)]
 pub struct YouTubeGenerator {
     channel_name: String,
     max_tags_length: usize,
@@ -653,6 +654,7 @@ pub struct YouTubeGenerator {
 
 /// Theme data
 #[derive(Clone, Copy)]
+#[allow(dead_code)]
 struct ThemeData {
     emoji: &'static str,
     thai_name: &'static str,

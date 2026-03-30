@@ -31,6 +31,7 @@ pub enum SuppressorMode {
 
 /// Per-band state for analysis and reduction.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 struct SuppressorBand {
     center_freq: f64,
     /// Bandpass analysis filters (one per channel, max 2)

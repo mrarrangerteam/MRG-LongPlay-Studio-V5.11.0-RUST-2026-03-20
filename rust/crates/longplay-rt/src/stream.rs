@@ -140,7 +140,23 @@ impl AudioStream {
         let mut callback_count: u32 = 0;
 
         // Simple sample rate conversion ratio (if needed)
+        // TODO(quality): The read loop below uses nearest-neighbour SRC
+        // (integer truncation of `src_pos`).  This introduces aliasing
+        // artefacts when target_sample_rate != output_sample_rate (e.g. a
+        // 44.1 kHz file on a 48 kHz device).  Replace with linear
+        // interpolation (`src_pos` fractional part blends adjacent samples)
+        // or a polyphase sinc-based SRC (e.g. the `rubato` crate) for
+        // production-quality conversion.
         let src_ratio = target_sample_rate as f64 / output_sample_rate as f64;
+
+        // V5.11.0 FIX: Pre-allocate ALL buffers OUTSIDE the callback closure.
+        // These are moved into the closure via `move` but allocated only ONCE
+        // at stream creation — NOT on every callback invocation.
+        let mut block_l = vec![0.0f32; BLOCK_SIZE];
+        let mut block_r = vec![0.0f32; BLOCK_SIZE];
+        let _buf_ch_l = vec![0.0f32; BLOCK_SIZE];
+        let _buf_ch_r = vec![0.0f32; BLOCK_SIZE];
+        let mut buffer: Vec<Vec<f32>> = vec![vec![0.0f32; BLOCK_SIZE], vec![0.0f32; BLOCK_SIZE]];
 
         let stream = device
             .build_output_stream(
@@ -157,11 +173,6 @@ impl AudioStream {
 
                     let mut current_pos = position.load(Ordering::Relaxed);
                     let num_output_frames = data.len() / output_channels;
-
-                    // BUG-RUST-005: .min(total_frames.saturating_sub(1)) is correct —
-                    // src_pos is a 0-based index into audio_l/audio_r, so clamping to
-                    // total_frames-1 (the last valid index) is the right bound.
-                    // Verified as false positive.
 
                     // Check if params changed and apply to DSP modules
                     if params.take_dirty() {
@@ -185,17 +196,8 @@ impl AudioStream {
                     let mut sum_sq_r: f32 = 0.0;
 
                     // Process multiple DSP blocks to fill the entire output buffer.
-                    // Previously only one block was processed, causing sample repetition
-                    // when cpal requested more frames than BLOCK_SIZE.
                     let mut frames_written: usize = 0;
                     let sr = target_sample_rate as i32;
-
-                    // Pre-allocate ALL buffers outside loop (BUG-RUST-001: no heap alloc in callback)
-                    let mut block_l = vec![0.0f32; BLOCK_SIZE];
-                    let mut block_r = vec![0.0f32; BLOCK_SIZE];
-                    let mut buf_ch_l = vec![0.0f32; BLOCK_SIZE];
-                    let mut buf_ch_r = vec![0.0f32; BLOCK_SIZE];
-                    let mut buffer: Vec<Vec<f32>> = vec![Vec::new(), Vec::new()];
 
                     while frames_written < num_output_frames {
                         let remaining = num_output_frames - frames_written;
@@ -214,13 +216,12 @@ impl AudioStream {
                             }
                         }
 
-                        // Reuse pre-allocated buffer (no heap alloc per block)
-                        buf_ch_l[..block_frames].copy_from_slice(&block_l[..block_frames]);
-                        buf_ch_r[..block_frames].copy_from_slice(&block_r[..block_frames]);
-                        buffer[0].clear();
-                        buffer[0].extend_from_slice(&buf_ch_l[..block_frames]);
-                        buffer[1].clear();
-                        buffer[1].extend_from_slice(&buf_ch_r[..block_frames]);
+                        // Reuse pre-allocated buffer — resize to block_frames then copy
+                        // resize() never allocates because capacity == BLOCK_SIZE >= block_frames
+                        buffer[0].resize(block_frames, 0.0);
+                        buffer[0].copy_from_slice(&block_l[..block_frames]);
+                        buffer[1].resize(block_frames, 0.0);
+                        buffer[1].copy_from_slice(&block_r[..block_frames]);
 
                         // Pre-gain headroom: -3 dB (matches V2 Python chain)
                         // Prevents clipping before the DSP chain on hot input signals
@@ -288,8 +289,7 @@ impl AudioStream {
                             // end-of-track rather than resetting to 0
                             position.store(total_frames, Ordering::Relaxed);
                             playing.store(false, Ordering::Relaxed);
-                            frames_written = num_output_frames; // exit loop
-                            break;
+                            break; // end-of-track: position already stored above
                         }
                     }
 

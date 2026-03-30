@@ -5,8 +5,8 @@ import os, glob
 block_cipher = None
 BASE = os.path.dirname(os.path.abspath(SPEC))
 
-# Native modules
-native_modules = [('/Volumes/Data Surakh/0.Vibecode/MRG-LONGPLAY-STUDIO-COMPLETE-2-3-5.10.0/longplay.cpython-39-darwin.so', '.')]
+# Native modules — auto-detect from current directory
+native_modules = []
 for so in glob.glob(os.path.join(BASE, '*.so')):
     native_modules.append((so, '.'))
 for dylib in glob.glob(os.path.join(BASE, '*.dylib')):

@@ -4,6 +4,9 @@ Multi-track video exporter — builds FFmpeg commands from a Project model.
 Provides:
     FormatPreset         — Dataclass with codec / bitrate / container settings
     MultiTrackExporter   — Builds and runs FFmpeg for multi-track export
+
+Hardware encoding (auto-detected lazily on first use, fallback chain):
+    h264_nvenc → h264_videotoolbox → h264_qsv → libx264
 """
 
 from __future__ import annotations
@@ -17,6 +20,36 @@ from dataclasses import dataclass, field
 from typing import Callable, Dict, List, Optional, Tuple
 
 from gui.models.track import Clip, Track, TrackType, Project
+
+# ---------------------------------------------------------------------------
+# Hardware encoder helpers — imported lazily to avoid detection at import time
+# ---------------------------------------------------------------------------
+
+def _hw_encoder() -> str:
+    """Return the best available hardware encoder name (lazy, cached)."""
+    try:
+        from gui.video.hw_encoder import _get_or_detect
+        return _get_or_detect()
+    except ImportError:
+        return "libx264"
+
+
+def get_encoder_flags(encoder: Optional[str] = None) -> List[str]:
+    """Return encoder-specific ffmpeg flags (lazy wrapper)."""
+    try:
+        from gui.video import hw_encoder as _hwe
+        return _hwe.get_encoder_flags(encoder)
+    except ImportError:
+        return ["-preset", "medium", "-crf", "23", "-movflags", "+faststart"]
+
+
+def encoder_info() -> str:
+    """Return human-readable encoder info string (lazy wrapper)."""
+    try:
+        from gui.video.hw_encoder import encoder_info as _ei
+        return _ei()
+    except ImportError:
+        return "libx264 — software fallback (hw_encoder not loaded)"
 
 
 # ---------------------------------------------------------------------------
@@ -36,35 +69,58 @@ class FormatPreset:
     extra_flags: List[str] = field(default_factory=list)
 
 
-# Built-in presets
-PRESETS: Dict[str, FormatPreset] = {
-    "mp4_1080p": FormatPreset(
-        name="MP4 1080p", container="mp4",
-        video_codec="libx264", audio_codec="aac",
-        video_bitrate="8M", audio_bitrate="192k",
-        resolution=(1920, 1080), fps=30.0,
-    ),
-    "mp4_4k": FormatPreset(
-        name="MP4 4K", container="mp4",
-        video_codec="libx264", audio_codec="aac",
-        video_bitrate="20M", audio_bitrate="256k",
-        resolution=(3840, 2160), fps=30.0,
-    ),
-    "webm_1080p": FormatPreset(
-        name="WebM 1080p", container="webm",
-        video_codec="libvpx-vp9", audio_codec="libopus",
-        video_bitrate="5M", audio_bitrate="128k",
-        resolution=(1920, 1080), fps=30.0,
-    ),
-    "prores_1080p": FormatPreset(
-        name="ProRes 1080p", container="mov",
-        video_codec="prores_ks", audio_codec="pcm_s16le",
-        video_bitrate="",  # prores doesn't use bitrate
-        audio_bitrate="",
-        resolution=(1920, 1080), fps=30.0,
-        extra_flags=["-profile:v", "3"],  # HQ profile
-    ),
-}
+def _build_presets() -> Dict[str, FormatPreset]:
+    """Build the PRESETS dict on first access (defers HW detection to use time)."""
+    hw = _hw_encoder()
+    flags = get_encoder_flags(hw)
+    return {
+        "mp4_1080p": FormatPreset(
+            name="MP4 1080p", container="mp4",
+            video_codec=hw, audio_codec="aac",
+            video_bitrate="8M", audio_bitrate="192k",
+            resolution=(1920, 1080), fps=30.0,
+            extra_flags=flags,
+        ),
+        "mp4_4k": FormatPreset(
+            name="MP4 4K", container="mp4",
+            video_codec=hw, audio_codec="aac",
+            video_bitrate="20M", audio_bitrate="256k",
+            resolution=(3840, 2160), fps=30.0,
+            extra_flags=flags,
+        ),
+        "webm_1080p": FormatPreset(
+            name="WebM 1080p", container="webm",
+            video_codec="libvpx-vp9", audio_codec="libopus",
+            video_bitrate="5M", audio_bitrate="128k",
+            resolution=(1920, 1080), fps=30.0,
+        ),
+        "prores_1080p": FormatPreset(
+            name="ProRes 1080p", container="mov",
+            video_codec="prores_ks", audio_codec="pcm_s16le",
+            video_bitrate="",  # prores doesn't use bitrate
+            audio_bitrate="",
+            resolution=(1920, 1080), fps=30.0,
+            extra_flags=["-profile:v", "3"],  # HQ profile
+        ),
+    }
+
+
+_PRESETS_CACHE: Optional[Dict[str, FormatPreset]] = None
+
+
+def _get_presets() -> Dict[str, FormatPreset]:
+    """Return PRESETS dict, building it (and running HW detection) on first call."""
+    global _PRESETS_CACHE
+    if _PRESETS_CACHE is None:
+        _PRESETS_CACHE = _build_presets()
+    return _PRESETS_CACHE
+
+
+def __getattr__(name: str) -> Dict[str, FormatPreset]:
+    """Lazy PRESETS — HW detection deferred to first attribute access."""
+    if name == "PRESETS":
+        return _get_presets()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 # ---------------------------------------------------------------------------
@@ -85,6 +141,7 @@ class MultiTrackExporter:
         self._ffmpeg = shutil.which("ffmpeg") or "ffmpeg"
         self._process: Optional[subprocess.Popen] = None  # type: ignore[type-arg]
         self._cancelled = False
+        self._encode_start: float = 0.0  # for speed/ETA reporting
 
     # -- public API --------------------------------------------------------
     def export(
@@ -99,8 +156,10 @@ class MultiTrackExporter:
 
         Returns True on success, False on failure/cancel.
         """
-        preset = format_preset or PRESETS["mp4_1080p"]
+        import time as _time
+        preset = format_preset or _get_presets()["mp4_1080p"]
         self._cancelled = False
+        self._encode_start = _time.perf_counter()
 
         cmd = self._build_command(project, output_path, preset)
         if cmd is None:
@@ -109,15 +168,16 @@ class MultiTrackExporter:
         try:
             self._process = subprocess.Popen(
                 cmd,
-                stdout=subprocess.PIPE,
+                stdout=subprocess.DEVNULL,  # not read — DEVNULL prevents deadlock on Windows
                 stderr=subprocess.PIPE,
                 universal_newlines=True,
             )
 
             duration = max(project.duration, 0.1)
             stderr_lines: List[str] = []
+            last_progress_secs: float = 0.0
 
-            # Read stderr for progress
+            # Read stderr for progress — CapCut-style: ETA + speed
             if self._process.stderr is not None:
                 for line in self._process.stderr:
                     if self._cancelled:
@@ -125,14 +185,26 @@ class MultiTrackExporter:
                         return False
 
                     stderr_lines.append(line)
-                    # Parse FFmpeg time= output for progress
                     if "time=" in line:
                         time_str = self._parse_time(line)
-                        if time_str is not None and progress_callback is not None:
+                        if time_str is not None:
+                            last_progress_secs = time_str
                             frac = min(1.0, time_str / duration)
-                            progress_callback(frac)
+                            if progress_callback is not None:
+                                progress_callback(frac)
 
             self._process.wait()
+
+            # Final progress + speed report
+            elapsed = _time.perf_counter() - self._encode_start
+            if elapsed > 0 and last_progress_secs > 0:
+                speed_x = last_progress_secs / elapsed
+                print(
+                    f"[export] done in {elapsed:.1f}s  "
+                    f"({speed_x:.1f}x realtime)  "
+                    f"encoder: {encoder_info()}"
+                )
+
             if progress_callback is not None:
                 progress_callback(1.0)
 
@@ -141,7 +213,7 @@ class MultiTrackExporter:
         except FileNotFoundError:
             # FFmpeg not found
             return False
-        except OSError as exc:
+        except OSError:
             return False
 
     def export_async(
@@ -154,10 +226,21 @@ class MultiTrackExporter:
     ) -> threading.Thread:
         """Run export in a background thread."""
         def _run() -> None:
-            from gui.utils.compat import QTimer
             result = self.export(project, output_path, format_preset, progress_callback)
             if done_callback is not None:
-                QTimer.singleShot(0, lambda r=result: done_callback(r))
+                # Marshal back to the Qt main thread via QTimer.singleShot(0).
+                # Guard: QTimer requires an active QApplication event loop.
+                # If called during testing or early startup (no QApplication),
+                # invoke the callback directly to avoid a silent no-op.
+                try:
+                    from gui.utils.compat import QTimer
+                    from PyQt6.QtWidgets import QApplication
+                    if QApplication.instance() is not None:
+                        QTimer.singleShot(0, lambda r=result: done_callback(r))
+                    else:
+                        done_callback(result)
+                except Exception:
+                    done_callback(result)
 
         t = threading.Thread(target=_run, daemon=True)
         t.start()
@@ -293,16 +376,19 @@ class MultiTrackExporter:
         if final_audio:
             cmd.extend(["-map", f"[{final_audio}]"])
 
-        # Codec / format
+        # Codec / format — extra_flags already contain encoder-specific tuning
         cmd.extend(["-c:v", preset.video_codec])
-        if preset.video_bitrate:
+        if preset.extra_flags:
+            # extra_flags provide encoder tuning (CRF/QP, preset, profile, etc.)
+            cmd.extend(preset.extra_flags)
+        elif preset.video_bitrate:
+            # Only add -b:v if no extra_flags (to avoid conflicts with CRF mode)
             cmd.extend(["-b:v", preset.video_bitrate])
+
         if final_audio:
             cmd.extend(["-c:a", preset.audio_codec])
             if preset.audio_bitrate:
                 cmd.extend(["-b:a", preset.audio_bitrate])
-
-        cmd.extend(preset.extra_flags)
 
         # Output
         cmd.append(output_path)

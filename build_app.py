@@ -291,9 +291,9 @@ app = BUNDLE(
     bundle_identifier='{BUNDLE_ID}',
     info_plist={{
         'CFBundleName': '{APP_NAME}',
-        'CFBundleDisplayName': '{APP_NAME} V5.9',
+        'CFBundleDisplayName': '{APP_NAME} V{APP_VERSION}',
         'CFBundleVersion': '{APP_VERSION}',
-        'CFBundleShortVersionString': '5.9',
+        'CFBundleShortVersionString': '{APP_VERSION}',
         'NSHighResolutionCapable': True,
         'LSMinimumSystemVersion': '{MIN_MACOS}',
         'NSMicrophoneUsageDescription': 'LongPlay Studio needs microphone access for audio monitoring.',

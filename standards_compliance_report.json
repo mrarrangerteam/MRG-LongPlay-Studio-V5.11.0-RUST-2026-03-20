@@ -1,0 +1,148 @@
+{
+  "timestamp": "2026-03-30T14:01:58",
+  "version": "V5.11.1",
+  "total": 30,
+  "passed": 25,
+  "failed": 5,
+  "pass_rate": "83.3%",
+  "results": {
+    "LUFS Spotify (target -14.0±1.0)": {
+      "pass": true,
+      "detail": "-14.00 LUFS (Δ+0.00)"
+    },
+    "True Peak Spotify (≤ -1.0 dBTP)": {
+      "pass": true,
+      "detail": "-3.75 dBTP"
+    },
+    "LUFS YouTube (target -14.0±1.0)": {
+      "pass": true,
+      "detail": "-14.00 LUFS (Δ+0.00)"
+    },
+    "True Peak YouTube (≤ -1.0 dBTP)": {
+      "pass": true,
+      "detail": "-3.75 dBTP"
+    },
+    "LUFS Apple Music (target -16.0±1.0)": {
+      "pass": true,
+      "detail": "-16.00 LUFS (Δ+0.00)"
+    },
+    "True Peak Apple Music (≤ -1.0 dBTP)": {
+      "pass": true,
+      "detail": "-4.34 dBTP"
+    },
+    "lufs_platforms": {
+      "Spotify": {
+        "target": -14.0
+      },
+      "YouTube": {
+        "target": -14.0
+      },
+      "Apple Music": {
+        "target": -16.0
+      }
+    },
+    "Limiter ceiling -1.0 dBTP with +6dB push": {
+      "pass": true,
+      "detail": "TP=-8.53 dBTP ✓"
+    },
+    "Limiter ceiling -1.0 dBTP with +12dB push": {
+      "pass": true,
+      "detail": "TP=-11.30 dBTP ✓"
+    },
+    "No clipping GAIN +0dB": {
+      "pass": true,
+      "detail": "clips=0, over_1.0=0, peak=-4.09dBFS"
+    },
+    "No clipping GAIN +6dB": {
+      "pass": true,
+      "detail": "clips=0, over_1.0=0, peak=-9.84dBFS"
+    },
+    "No clipping GAIN +12dB": {
+      "pass": true,
+      "detail": "clips=0, over_1.0=0, peak=-14.01dBFS"
+    },
+    "No clipping GAIN +18dB": {
+      "pass": true,
+      "detail": "clips=0, over_1.0=0, peak=-14.35dBFS"
+    },
+    "EQ +12dB @ 250Hz changes 250-500Hz": {
+      "pass": false,
+      "detail": "Δ=-0.3 dB (need ≥+2.0)"
+    },
+    "EQ +12dB @ 1000Hz changes 500-1kHz": {
+      "pass": true,
+      "detail": "Δ=+2.6 dB (need ≥+2.0)"
+    },
+    "EQ +12dB @ 2000Hz changes 1-2kHz": {
+      "pass": false,
+      "detail": "Δ=-3.7 dB (need ≥+2.0)"
+    },
+    "EQ -12dB @ 1kHz cuts 500-1kHz band": {
+      "pass": true,
+      "detail": "Δ=-4.0 dB (need ≤-2.0)"
+    },
+    "GAIN +3dB louder than +0dB": {
+      "pass": true,
+      "detail": "-14.00 → -14.00 LUFS (Δ-0.00)"
+    },
+    "GAIN +6dB louder than +3dB": {
+      "pass": true,
+      "detail": "-14.00 → -14.00 LUFS (Δ-0.00)"
+    },
+    "GAIN +9dB louder than +6dB": {
+      "pass": true,
+      "detail": "-14.00 → -14.00 LUFS (Δ+0.00)"
+    },
+    "GAIN +0dB LUFS within ±1.0 of target -14": {
+      "pass": true,
+      "detail": "-14.00 LUFS vs target -14.0 (Δ+0.00)"
+    },
+    "Stereo correlation > 0.0 (in phase)": {
+      "pass": true,
+      "detail": "correlation=0.961"
+    },
+    "Stereo correlation > 0.7 (music normal)": {
+      "pass": true,
+      "detail": "correlation=0.961"
+    },
+    "Dynamic range crest ≥ 6 dB (not over-compressed)": {
+      "pass": true,
+      "detail": "crest=13.0 dB"
+    },
+    "LU range ≥ 3 LU (not squashed)": {
+      "pass": false,
+      "detail": "LU range=1.5 LU"
+    },
+    "No frequency null bands (all > -60 dB)": {
+      "pass": true,
+      "detail": "min=28.6 dB"
+    },
+    "Sub-bass ≤ 12 dB above mid (not bass heavy)": {
+      "pass": true,
+      "detail": "sub=63.5, mid=54.1, Δ=9.4"
+    },
+    "Air ≤ 20 dB below mid (not too dark)": {
+      "pass": false,
+      "detail": "air=28.6, mid=54.1, Δ=25.6"
+    },
+    "THD flat chain ≤ 3% (baseline quality)": {
+      "pass": true,
+      "detail": "THD=0.00% (standard mastering: < 1%)"
+    },
+    "EQ +6dB doesn't add >5% THD vs baseline": {
+      "pass": true,
+      "detail": "THD increase=+0.01%"
+    },
+    "Maximizer identified as THD source if > flat+5%": {
+      "pass": false,
+      "detail": "Flat=0.00% Max=0.00% Δ=+0.00%"
+    }
+  },
+  "input": {
+    "lufs": -12.831151671699258,
+    "true_peak": -4.904645121347518,
+    "peak": -4.93416395094483,
+    "rms": -15.78889576841914,
+    "correlation": 0.9629713103421805
+  }
+}

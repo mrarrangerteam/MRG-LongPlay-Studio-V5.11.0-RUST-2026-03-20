@@ -3,7 +3,7 @@
 use pyo3::prelude::*;
 
 /// AI Mastering Recommendation returned to Python
-#[pyclass]
+#[pyclass(skip_from_py_object)]
 #[derive(Clone)]
 pub struct PyMasterRecommendation {
     #[pyo3(get)]
@@ -41,7 +41,7 @@ impl PyMasterRecommendation {
 }
 
 /// Audio analysis result returned from AI DJ
-#[pyclass]
+#[pyclass(skip_from_py_object)]
 #[derive(Clone)]
 pub struct PyAudioAnalysis {
     #[pyo3(get)]
@@ -108,7 +108,7 @@ impl From<longplay_aidj::AudioAnalysis> for PyAudioAnalysis {
 }
 
 /// Hook detection result returned from HookExtractor
-#[pyclass]
+#[pyclass(skip_from_py_object)]
 #[derive(Clone)]
 pub struct PyHookResult {
     #[pyo3(get)]

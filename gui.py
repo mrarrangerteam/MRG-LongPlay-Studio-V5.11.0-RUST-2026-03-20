@@ -6634,8 +6634,12 @@ class LongPlayStudioV4(QMainWindow):
     def _toggle_playback(self):
         """Toggle play/pause with spacebar"""
         try:
-            if self.audio_player.is_playing:
-                self.audio_player.pause()
+            if self.audio_player.is_playing or (self._rt_engine and self._rt_active and self._rt_engine.is_playing()):
+                # V5.11.0: Pause RT engine or QMediaPlayer
+                if self._rt_engine and self._rt_active:
+                    self._rt_engine.pause()
+                else:
+                    self.audio_player.pause()
                 if hasattr(self, 'video_preview') and self.video_preview:
                     self.video_preview.pause()
                 self.timeline.setPlaying(False)
@@ -6643,7 +6647,11 @@ class LongPlayStudioV4(QMainWindow):
                 if not self.audio_files:
                     print("[PLAY] ⚠️ No audio files loaded - add audio first")
                     return
-                self.audio_player.play()
+                # V5.11.0: RT engine handles playback when active
+                if self._rt_engine and self._rt_active:
+                    self._rt_engine.play()
+                else:
+                    self.audio_player.play()
                 if hasattr(self, 'video_preview') and self.video_preview:
                     self.video_preview.play()
                 self.timeline.setPlaying(True)
@@ -9796,6 +9804,8 @@ class LongPlayStudioV4(QMainWindow):
 
     def _restore_after_gain(self, position_ms: int, was_playing: bool):
         """Restore playback position and state after gain preview reload."""
+        if self._rt_engine and self._rt_active:
+            return  # RT engine handles its own playback
         try:
             self.audio_player.player.setPosition(position_ms)
             if was_playing:
@@ -10561,8 +10571,12 @@ class LongPlayStudioV4(QMainWindow):
         
         # Seek audio player to this position
         position_ms = int(preview_start * 1000)
-        self.audio_player.seek(position_ms)
-        self.audio_player.play()
+        if self._rt_engine and self._rt_active:
+            self._rt_engine.seek(position_ms)
+            self._rt_engine.play()
+        else:
+            self.audio_player.seek(position_ms)
+            self.audio_player.play()
         
         # Update timeline playhead
         self.timeline.setPlayhead(position_ms)

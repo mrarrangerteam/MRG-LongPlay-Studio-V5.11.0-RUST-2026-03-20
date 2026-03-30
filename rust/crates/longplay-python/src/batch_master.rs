@@ -7,11 +7,9 @@ use pyo3::prelude::*;
 use pyo3::exceptions::PyRuntimeError;
 
 use longplay_chain::batch_master as rust_batch;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
 
 /// Python-facing batch master configuration
-#[pyclass]
+#[pyclass(from_py_object)]
 #[derive(Clone)]
 pub struct PyBatchMasterConfig {
     #[pyo3(get, set)]
@@ -90,7 +88,7 @@ impl From<&PyBatchMasterConfig> for rust_batch::BatchMasterConfig {
 }
 
 /// Result of mastering a single song
-#[pyclass]
+#[pyclass(skip_from_py_object)]
 #[derive(Clone)]
 pub struct PyBatchMasterResult {
     #[pyo3(get)]
@@ -129,7 +127,7 @@ impl PyBatchMasterResult {
 #[pyfunction]
 #[pyo3(signature = (input_paths, output_paths, config=None, callback=None))]
 pub fn batch_master(
-    py: Python<'_>,
+    _py: Python<'_>,
     input_paths: Vec<String>,
     output_paths: Vec<String>,
     config: Option<&PyBatchMasterConfig>,
@@ -149,11 +147,9 @@ pub fn batch_master(
     // Build thread-safe progress callback that calls back into Python
     let progress_cb: Option<rust_batch::BatchProgressCallback> = callback.map(|py_cb| {
         let cb: rust_batch::BatchProgressCallback = Box::new(move |done, total, file: &str| {
-            if let Some(py) = Python::try_attach(|py| {
+            Python::try_attach(|py| {
                 let _ = py_cb.call(py, (done, total, file), None);
-            }) {
-                // callback executed
-            }
+            });
         });
         cb
     });

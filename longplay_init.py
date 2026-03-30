@@ -1,4 +1,4 @@
-from .longplay import *
+import longplay
 
 __doc__ = longplay.__doc__
 if hasattr(longplay, "__all__"):

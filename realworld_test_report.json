@@ -1,0 +1,61 @@
+{
+  "input": {
+    "label": "INPUT (Hook WAV)",
+    "duration_sec": 29.013333333333332,
+    "peak_db": -4.93416395094483,
+    "rms_db": -15.78889576841914,
+    "peak_lin": 0.566619873046875,
+    "correlation": 0.9629713103421805,
+    "stereo_width": 0.13754586731930413,
+    "clip_count": 0,
+    "is_clipping": false,
+    "sr": 48000
+  },
+  "master": {
+    "label": "MASTERED OUTPUT",
+    "duration_sec": 29.013333333333332,
+    "peak_db": -0.9998544876801003,
+    "rms_db": -14.00136531922392,
+    "peak_lin": 0.891265869140625,
+    "correlation": 0.944105176800161,
+    "stereo_width": 0.16980568490222758,
+    "clip_count": 0,
+    "is_clipping": false,
+    "sr": 48000
+  },
+  "gain_test": {
+    "0.0": {
+      "rms_db": -14.000562903771838,
+      "clips": false
+    },
+    "6.0": {
+      "rms_db": -14.000000229471443,
+      "clips": false
+    },
+    "12.0": {
+      "rms_db": -14.000041211332645,
+      "clips": false
+    }
+  },
+  "eq_pass": "0/4",
+  "irc_results": {
+    "IRC 1": {
+      "peak_db": -3.980784484678171,
+      "rms_db": -13.999995223695237,
+      "clips": 0
+    },
+    "IRC 4": {
+      "peak_db": -3.980784484678171,
+      "rms_db": -13.999995223695237,
+      "clips": 0
+    },
+    "IRC LL": {
+      "peak_db": -3.980784484678171,
+      "rms_db": -13.999995223695237,
+      "clips": 0
+    }
+  },
+  "pass_count": 11,
+  "total_count": 14,
+  "sound_clipping": false
+}
